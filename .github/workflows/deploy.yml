@@ -1,0 +1,45 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Deploy to VPS
+      uses: appleboy/ssh-action@master
+      with:
+        host: ${{ secrets.VPS_HOST }}
+        username: ${{ secrets.VPS_USER }}
+        key: ${{ secrets.VPS_SSH_KEY }}
+        script: |
+          cd /opt/turnos-rrhh
+          echo "=== Iniciando deploy ==="
+
+          # Backup de .env
+          cp .env .env.backup.$(date +%Y%m%d_%H%M%S) 2>/dev/null || true
+
+          # Hacer pull del código
+          git fetch origin main
+          git reset --hard origin/main
+
+          # Verificar que .env existe
+          if [ ! -f ".env" ]; then
+            echo "ERROR: .env no encontrado, restaurando backup..."
+            ls -la .env.backup.* 2>/dev/null | tail -1 | xargs -I {} cp {} .env
+          fi
+
+          # Reconstruir contenedores
+          docker-compose down
+          docker-compose up -d --build
+
+          # Verificar estado
+          docker-compose ps
+
+          echo "=== Deploy completado ==="
