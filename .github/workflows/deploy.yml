@@ -12,27 +12,46 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Deploy to VPS
-      uses: appleboy/ssh-action@master
-      with:
-        host: ${{ secrets.VPS_HOST }}
-        username: ${{ secrets.VPS_USER }}
-        key: ${{ secrets.VPS_SSH_KEY }}
-        script: |
+    - name: Setup SSH
+      run: |
+        mkdir -p ~/.ssh
+        echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+        chmod 600 ~/.ssh/deploy_key
+        cat >> ~/.ssh/config << EOF
+        Host vps
+          HostName ${{ secrets.VPS_HOST }}
+          User ${{ secrets.VPS_USER }}
+          IdentityFile ~/.ssh/deploy_key
+          StrictHostKeyChecking no
+        EOF
+
+    - name: Deploy files to VPS
+      run: |
+        echo "=== Sincronizando archivos ==="
+        # Excluir .git, .github y archivos sensibles
+        rsync -avz --delete \
+          --exclude='.git' \
+          --exclude='.github' \
+          --exclude='.env' \
+          --exclude='.env.example' \
+          --exclude='postgres_data' \
+          --exclude='node_modules' \
+          --exclude='__pycache__' \
+          --exclude='*.pyc' \
+          ./ ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/turnos-rrhh/
+
+    - name: Rebuild containers on VPS
+      run: |
+        echo "=== Reconstruyendo contenedores ==="
+        ssh ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} << 'REMOTE_SCRIPT'
           cd /opt/turnos-rrhh
-          echo "=== Iniciando deploy ==="
-
-          # Backup de .env
-          cp .env .env.backup.$(date +%Y%m%d_%H%M%S) 2>/dev/null || true
-
-          # Hacer pull del código
-          git fetch origin main
-          git reset --hard origin/main
+          echo "Directorio actual: $(pwd)"
+          ls -la
 
           # Verificar que .env existe
           if [ ! -f ".env" ]; then
-            echo "ERROR: .env no encontrado, restaurando backup..."
-            ls -la .env.backup.* 2>/dev/null | tail -1 | xargs -I {} cp {} .env
+            echo "ERROR: .env no encontrado"
+            exit 1
           fi
 
           # Reconstruir contenedores
@@ -40,6 +59,8 @@ jobs:
           docker-compose up -d --build
 
           # Verificar estado
+          echo "=== Estado de contenedores ==="
           docker-compose ps
 
           echo "=== Deploy completado ==="
+        REMOTE_SCRIPT
