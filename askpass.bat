@@ -1,0 +1,1 @@
+@echo Hikarus1245.
