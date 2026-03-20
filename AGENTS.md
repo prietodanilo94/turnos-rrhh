@@ -17,12 +17,14 @@ PC Local (Windows + OneDrive)
     │
     │── git push ───► GitHub (privado)
     │                      │
-    │                      │──► VPS (173.212.220.77)
+    │                      │──► GitHub Actions ──► VPS (173.212.220.77)
     │                           /opt/turnos-rrhh
     │                           Docker Compose
     │
     └── URL: https://turnos.dpmake.cl
 ```
+
+**Deploy Automático:** Cada push a `main` dispara deploy automático vía GitHub Actions.
 
 ## Estructura de Archivos Sensibles
 
