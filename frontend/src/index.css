@@ -1305,3 +1305,42 @@ body {
         overflow-x: auto;
     }
 }
+
+/* ── Additional (v2) ─────────────────────────────────────────── */
+.total-hours.overtime {
+    color: var(--accent-yellow);
+}
+
+.sunday-col {
+    background: rgba(139,92,246,0.04);
+}
+
+.bottom-actions {
+    display: flex;
+    justify-content: flex-end;
+    padding: 16px 0 32px;
+}
+
+.bottom-buttons {
+    display: flex;
+    gap: 12px;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-8px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+.shift-cell {
+    padding: 6px;
+    vertical-align: middle;
+}
+
+.col-sunday {
+    background: rgba(139,92,246,0.04);
+}
+
+.dropdown-item.clear {
+    color: var(--accent-red);
+}
+

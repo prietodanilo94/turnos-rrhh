@@ -18,9 +18,14 @@ class MessageResponse(BaseModel):
 
 
 # ── RUT Validator ──────────────────────────────────────────────
+def normalize_rut(rut: str) -> str:
+    """Normalize RUT: remove dots and dashes, uppercase."""
+    return rut.replace(".", "").replace("-", "").replace(" ", "").upper()
+
+
 def validate_rut(rut: str) -> str:
-    """Validate and normalize Chilean RUT."""
-    cleaned = rut.replace(".", "").replace("-", "").upper()
+    """Validate and format Chilean RUT."""
+    cleaned = normalize_rut(rut)
     if len(cleaned) < 2:
         raise ValueError("RUT inválido")
 
@@ -48,9 +53,21 @@ def validate_rut(rut: str) -> str:
     return f"{formatted_body}-{dv}"
 
 
+def rut_for_lookup(rut: str) -> str:
+    """Normalize RUT for DB lookup. Accepts: 12345678-9, 12.345.678-9, 123456789"""
+    cleaned = normalize_rut(rut)
+    # If no DV separator and all digits, add dash before last char
+    if len(cleaned) >= 2:
+        body = cleaned[:-1]
+        dv = cleaned[-1]
+        formatted_body = f"{int(body):,}".replace(",", ".")
+        return f"{formatted_body}-{dv}"
+    return rut
+
+
 # ── Auth ───────────────────────────────────────────────────────
 class LoginRequest(BaseModel):
-    email: EmailStr
+    rut: str
     password: str
 
 
@@ -61,15 +78,24 @@ class TokenResponse(BaseModel):
     expires_in: int
 
 
+class BranchSimple(BaseModel):
+    id: int
+    name: str
+    code: str
+
+    class Config:
+        from_attributes = True
+
+
 class UserResponse(BaseModel):
     id: int
-    email: str
+    rut: str
     first_name: str
     last_name: str
-    rut: str
+    email: Optional[str] = None
     role: str
-    branch_id: Optional[int] = None
-    branch_name: Optional[str] = None
+    branches: list[BranchSimple] = []
+    default_branch_id: Optional[int] = None
     is_active: bool
 
     class Config:
@@ -120,7 +146,7 @@ class WorkerCreate(BaseModel):
     branch_id: int
     position: Optional[str] = None
     contract_type: str = "indefinido"
-    contracted_weekly_hours: int = 44
+    contracted_weekly_hours: int = 42
     hire_date: date
 
     @field_validator("rut")
@@ -251,6 +277,7 @@ class ScheduleResponse(BaseModel):
     custom_end_time: Optional[time]
     total_hours: float
     is_day_off: bool
+    is_locked: bool = False
     status: str
     notes: Optional[str]
 
@@ -260,13 +287,14 @@ class ScheduleResponse(BaseModel):
 
 # ── User Management ────────────────────────────────────────────
 class UserCreate(BaseModel):
-    email: EmailStr
-    password: str
+    rut: str
+    password: str = "1234"
     first_name: str
     last_name: str
-    rut: str
+    email: Optional[str] = None
     role: str = "manager"
-    branch_id: Optional[int] = None
+    branch_ids: list[int] = []
+    default_branch_id: Optional[int] = None
 
     @field_validator("rut")
     @classmethod
@@ -283,9 +311,56 @@ class UserCreate(BaseModel):
 
 
 class UserUpdate(BaseModel):
-    email: Optional[EmailStr] = None
     first_name: Optional[str] = None
     last_name: Optional[str] = None
+    email: Optional[str] = None
     role: Optional[str] = None
-    branch_id: Optional[int] = None
+    branch_ids: Optional[list[int]] = None
+    default_branch_id: Optional[int] = None
     is_active: Optional[bool] = None
+
+
+# ── Labor Rules ────────────────────────────────────────────────
+class LaborRuleResponse(BaseModel):
+    id: int
+    rule_code: str
+    rule_value: float
+    effective_from: date
+    effective_until: Optional[date]
+    description: Optional[str]
+
+    class Config:
+        from_attributes = True
+
+
+# ── Status / Completeness ─────────────────────────────────────
+class BranchCompleteness(BaseModel):
+    branch_id: int
+    branch_name: str
+    branch_code: str
+    total_workers: int
+    workers_with_schedules: int
+    is_complete: bool
+    status: str  # 'complete', 'incomplete', 'empty'
+
+
+class CompletenessResponse(BaseModel):
+    week_start: date
+    complete: list[BranchCompleteness]
+    incomplete: list[BranchCompleteness]
+
+
+# ── Audit Log ─────────────────────────────────────────────────
+class AuditLogResponse(BaseModel):
+    id: int
+    user_rut: Optional[str] = None
+    user_name: Optional[str] = None
+    action: str
+    entity_type: str
+    entity_id: Optional[int]
+    old_values: Optional[dict] = None
+    new_values: Optional[dict] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True

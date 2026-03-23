@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db
 from app.models import User
+from app.schemas import rut_for_lookup
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
@@ -47,6 +48,12 @@ def decode_token(token: str) -> dict:
             detail="Token inválido o expirado",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+
+def get_user_by_rut(db: Session, rut: str) -> Optional[User]:
+    """Lookup user by RUT, accepting any format (with/without dots and dash)."""
+    normalized = rut_for_lookup(rut)
+    return db.query(User).filter(User.rut == normalized).first()
 
 
 async def get_current_user(

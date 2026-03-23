@@ -22,7 +22,7 @@ class Branch(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
     workers = relationship("Worker", back_populates="branch")
-    users = relationship("User", back_populates="branch")
+    user_branches = relationship("UserBranch", back_populates="branch")
     shift_templates = relationship("ShiftTemplate", back_populates="branch")
 
 
@@ -30,19 +30,18 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True)
-    email = Column(String(255), nullable=False, unique=True)
+    rut = Column(String(12), nullable=False, unique=True)
     password_hash = Column(String(255), nullable=False)
     first_name = Column(String(100), nullable=False)
     last_name = Column(String(100), nullable=False)
-    rut = Column(String(12), nullable=False, unique=True)
+    email = Column(String(255), nullable=True)
     role = Column(String(20), nullable=False)
-    branch_id = Column(Integer, ForeignKey("branches.id"), nullable=True)
     is_active = Column(Boolean, default=True)
     last_login = Column(DateTime, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
-    branch = relationship("Branch", back_populates="users")
+    user_branches = relationship("UserBranch", back_populates="user", lazy="joined")
 
     __table_args__ = (
         CheckConstraint("role IN ('admin', 'manager', 'viewer')", name="valid_role"),
@@ -51,6 +50,36 @@ class User(Base):
     @property
     def full_name(self):
         return f"{self.first_name} {self.last_name}"
+
+    @property
+    def branches(self):
+        """List of branches this user has access to."""
+        return [ub.branch for ub in self.user_branches]
+
+    @property
+    def default_branch(self):
+        """The user's default branch, or first one."""
+        for ub in self.user_branches:
+            if ub.is_default:
+                return ub.branch
+        return self.user_branches[0].branch if self.user_branches else None
+
+
+class UserBranch(Base):
+    __tablename__ = "user_branches"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    branch_id = Column(Integer, ForeignKey("branches.id", ondelete="CASCADE"), nullable=False)
+    is_default = Column(Boolean, default=False)
+    created_at = Column(DateTime, server_default=func.now())
+
+    user = relationship("User", back_populates="user_branches")
+    branch = relationship("Branch", back_populates="user_branches")
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "branch_id", name="unique_user_branch"),
+    )
 
 
 class Worker(Base):
@@ -63,7 +92,7 @@ class Worker(Base):
     branch_id = Column(Integer, ForeignKey("branches.id"), nullable=False)
     position = Column(String(100))
     contract_type = Column(String(30), nullable=False)
-    contracted_weekly_hours = Column(Integer, nullable=False, default=44)
+    contracted_weekly_hours = Column(Integer, nullable=False, default=42)
     hire_date = Column(Date, nullable=False)
     termination_date = Column(Date, nullable=True)
     is_active = Column(Boolean, default=True)
@@ -120,6 +149,7 @@ class Schedule(Base):
     custom_end_time = Column(Time, nullable=True)
     total_hours = Column(Numeric(4, 2), nullable=False)
     is_day_off = Column(Boolean, default=False)
+    is_locked = Column(Boolean, default=False)
     status = Column(String(20), default="draft")
     notes = Column(Text, nullable=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False)

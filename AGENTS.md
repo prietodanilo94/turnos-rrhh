@@ -1,128 +1,132 @@
-# Comunicación entre Agentes - TurnosRRHH
+# TurnosRRHH — Guía de Agentes
 
-> **IMPORTANTE**: Leer este archivo antes de hacer cualquier cambio en el proyecto.
+> **Leer SIEMPRE antes de hacer cualquier cambio.**
 
-## Resumen del Proyecto
+## Instrucciones para Agentes
 
-**TurnosRRHH** es un sistema web para gestión de horarios semanales de trabajadores en sucursales de venta.
+1. **Ahorro de tokens**: Cuando modifiques código, devuelve solo el snippet o función que cambió, NO el archivo completo.
+2. **Leer `WORKLOG.md`** antes de empezar para conocer el estado actual del proyecto.
+3. **Actualizar `WORKLOG.md`** al terminar cada sesión de trabajo.
+4. **Nunca** exponer contraseñas reales ni subir `.env` a Git.
+5. Verificar `.gitignore` antes de cada commit.
 
-- **Backend**: FastAPI (Python 3.11) + PostgreSQL 15
-- **Frontend**: React + Vite
-- **Deploy**: Docker Compose + Nginx (Proxy Inverso)
-
-## Arquitectura de Deploy
+## Arquitectura
 
 ```
-PC Local (Windows + OneDrive)
-    │
-    │── git push ───► GitHub (privado)
-    │                      │
-    │                      │──► GitHub Actions ──► VPS (173.212.220.77)
-    │                           /opt/turnos-rrhh
-    │                           Docker Compose
-    │
-    └── URL: https://turnos.dpmake.cl
+┌─────────────────────────────────────────────────┐
+│ Frontend (React + Vite) → puerto 3010           │
+│   Login RUT → Grilla turnos → Dashboard Admin   │
+├─────────────────────────────────────────────────┤
+│ Backend (FastAPI + Python 3.11) → puerto 8010   │
+│   JWT Auth │ CRUD │ Reglas laborales │ Export    │
+├─────────────────────────────────────────────────┤
+│ PostgreSQL 15 → interno Docker                  │
+└─────────────────────────────────────────────────┘
+Deploy: Docker Compose + Nginx → VPS 173.212.220.77
+URL: https://turnos.dpmake.cl
+CI/CD: GitHub Actions (push a main → auto-deploy)
 ```
 
-**Deploy Automático:** Cada push a `main` dispara deploy automático vía GitHub Actions.
+## Modelo de Datos
 
-## Estructura de Archivos Sensibles
+```
+users (jefes/admin)
+  ├── rut (login principal)
+  ├── password_hash (default: 1234)
+  ├── role: admin | manager | viewer
+  └── N:M → user_branches → branches
 
-### .env (NO SE SUBE A GIT)
-- Ubicación: `/opt/turnos-rrhh/.env` (solo en VPS)
-- Contiene: Contraseñas reales de DB, JWT_SECRET, credenciales admin
-- **NUNCA** subir a GitHub, ni siquiera a repos privados
+branches (sucursales/talleres)
+  └── 1:N → workers (trabajadores)
+                └── 1:N → schedules (turnos diarios)
+                              └── FK → shift_templates
 
-### .env.example (SÍ SE SUBE A GIT)
-- Plantilla con valores de ejemplo
-- Guía para crear el .env real en nuevas instalaciones
+audit_log → registra toda acción por user_id
+labor_rules → reglas laborales vigentes por fecha
+weekly_status → estado publicación por branch+semana
+```
 
-## Acceso al VPS
+## Reglas Laborales (Chile)
+
+| Regla | Valor | Comportamiento |
+|-------|-------|----------------|
+| Horas semanales OK | 36-42 | ✅ Verde |
+| Bajo mínimo | <36 | 🔴 Rojo |
+| Sobre máximo legal | >44 | 🔴 Rojo, bloqueado |
+| Horas extra | 42-44 | 🟡 Color especial |
+| Extra diaria max | 2 hrs | Bloquear exceso |
+| Días consecutivos max | 6 | Auto-lock 🔒 día 7 |
+| Domingos libres/mes | Mín 2 | Si trabajó 2 → lock restantes |
+
+## Estructura de Archivos
+
+```
+turnos-rrhh/
+├── backend/
+│   ├── app/
+│   │   ├── main.py          # FastAPI app + startup
+│   │   ├── config.py         # Settings (pydantic-settings)
+│   │   ├── database.py       # SQLAlchemy engine
+│   │   ├── models.py         # Modelos ORM
+│   │   ├── schemas.py        # Pydantic schemas
+│   │   ├── auth.py           # JWT + password utils
+│   │   ├── routes/
+│   │   │   ├── auth.py       # Login, refresh, /me
+│   │   │   ├── branches.py   # CRUD sucursales
+│   │   │   ├── workers.py    # CRUD trabajadores
+│   │   │   ├── templates.py  # CRUD plantillas de turno
+│   │   │   ├── schedules.py  # Bulk save, copy, publish, swap
+│   │   │   ├── users.py      # CRUD usuarios (admin)
+│   │   │   ├── status.py     # Query completitud
+│   │   │   └── export.py     # Excel + JSON
+│   │   └── scripts/
+│   │       └── create_admin.py
+│   ├── init.sql
+│   ├── requirements.txt
+│   └── Dockerfile
+├── frontend/
+│   ├── src/
+│   │   ├── App.jsx
+│   │   ├── main.jsx
+│   │   ├── index.css
+│   │   ├── api/client.js
+│   │   ├── context/AuthContext.jsx
+│   │   ├── pages/
+│   │   ├── components/
+│   │   └── utils/laborRules.js
+│   ├── package.json
+│   ├── vite.config.js
+│   └── Dockerfile
+├── docker-compose.yml
+├── turnos-rrhh.conf          # Nginx config
+├── AGENTS.md                 # ← Este archivo
+├── WORKLOG.md                # Log de trabajo continuo
+└── .github/workflows/deploy.yml
+```
+
+## Comandos Rápidos
 
 ```bash
-# Conexión SSH (clave configurada)
+# Levantar todo
+docker-compose up -d --build
+
+# Ver logs
+docker-compose logs -f backend
+
+# SSH al VPS
 ssh root@173.212.220.77
 
-# Docker en VPS
-cd /opt/turnos-rrhh
-docker-compose ps
-docker-compose logs -f backend
-docker-compose logs -f frontend
+# Frontend local
+cd frontend && npm install && npm run dev
+
+# Backend local
+cd backend && pip install -r requirements.txt && uvicorn app.main:app --reload
 ```
 
-## Flujo de Trabajo Git
+## URLs
 
-### 1. En PC Local (desarrollo)
-```bash
-# Ver cambios
-git status
-
-# Agregar archivos
-git add .
-
-# Commit con mensaje descriptivo
-git commit -m "feat: descripción del cambio"
-
-# Subir a GitHub
-git push origin main
-```
-
-### 2. En VPS (deploy)
-```bash
-cd /opt/turnos-rrhh
-git pull
-docker-compose up -d --build
-```
-
-## Comandos Útiles
-
-### Backend (local)
-```bash
-cd backend
-pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
-```
-
-### Frontend (local)
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-### Docker (VPS)
-```bash
-# Ver logs
-docker-compose logs -f --tail 50
-
-# Reiniciar servicios
-docker-compose restart
-
-# Reconstruir completamente
-docker-compose down
-docker-compose up -d --build
-```
-
-## URLs Importantes
-
-| Servicio | Local | Producción (VPS) |
-|----------|-------|------------------|
-| Frontend | http://localhost:3000 | https://turnos.dpmake.cl |
-| Backend API | http://localhost:8000 | https://turnos.dpmake.cl/api |
-| API Docs | http://localhost:8000/docs | https://turnos.dpmake.cl/docs |
-
-## Notas para Agentes
-
-1. **Siempre** verificar que `.env` está en `.gitignore` antes de hacer commit
-2. **Nunca** exponer contraseñas reales en el código o en conversaciones
-3. El VPS tiene UFW configurado - solo puertos 80/443 están abiertos externamente
-4. La base de datos de TurnosRRHH es independiente del PostgreSQL compartido de otras apps
-5. Para cambios grandes, crear una rama: `git checkout -b feature/nueva-funcionalidad`
-
-## Contacto/Contexto
-
-- Usuario: Danilo Prieto
-- Email: prieto.danilo94@gmail.com
-- VPS: 173.212.220.77 (Hetzner)
-- Dominio: dpmake.cl
-- Proyecto creado: Marzo 2026
+| Servicio | Local | Producción |
+|----------|-------|------------|
+| Frontend | http://localhost:3010 | https://turnos.dpmake.cl |
+| Backend | http://localhost:8010 | https://turnos.dpmake.cl/api |
+| API Docs | http://localhost:8010/docs | https://turnos.dpmake.cl/docs |

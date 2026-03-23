@@ -1,6 +1,7 @@
 -- ============================================================
--- SISTEMA DE GESTIÓN DE TURNOS - ESQUEMA COMPLETO
+-- SISTEMA DE GESTIÓN DE TURNOS - ESQUEMA COMPLETO (v2)
 -- Base de datos: PostgreSQL 15+
+-- Login: RUT + password (default: 1234)
 -- ============================================================
 
 -- 1. SUCURSALES
@@ -15,23 +16,32 @@ CREATE TABLE branches (
     updated_at TIMESTAMP DEFAULT NOW()
 );
 
--- 2. USUARIOS DEL SISTEMA
+-- 2. USUARIOS DEL SISTEMA (login por RUT)
 CREATE TABLE users (
     id SERIAL PRIMARY KEY,
-    email VARCHAR(255) NOT NULL UNIQUE,
+    rut VARCHAR(12) NOT NULL UNIQUE,
     password_hash VARCHAR(255) NOT NULL,
     first_name VARCHAR(100) NOT NULL,
     last_name VARCHAR(100) NOT NULL,
-    rut VARCHAR(12) NOT NULL UNIQUE,
+    email VARCHAR(255),
     role VARCHAR(20) NOT NULL CHECK (role IN ('admin', 'manager', 'viewer')),
-    branch_id INTEGER REFERENCES branches(id),
     is_active BOOLEAN DEFAULT true,
     last_login TIMESTAMP,
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
 
--- 3. TRABAJADORES
+-- 3. RELACIÓN USUARIOS ↔ SUCURSALES (N:M)
+CREATE TABLE user_branches (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    branch_id INTEGER NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
+    is_default BOOLEAN DEFAULT false,
+    created_at TIMESTAMP DEFAULT NOW(),
+    CONSTRAINT unique_user_branch UNIQUE (user_id, branch_id)
+);
+
+-- 4. TRABAJADORES
 CREATE TABLE workers (
     id SERIAL PRIMARY KEY,
     rut VARCHAR(12) NOT NULL UNIQUE,
@@ -42,7 +52,7 @@ CREATE TABLE workers (
     contract_type VARCHAR(30) NOT NULL CHECK (
         contract_type IN ('indefinido', 'plazo_fijo', 'part_time', 'honorarios')
     ),
-    contracted_weekly_hours INTEGER NOT NULL DEFAULT 44,
+    contracted_weekly_hours INTEGER NOT NULL DEFAULT 42,
     hire_date DATE NOT NULL,
     termination_date DATE,
     is_active BOOLEAN DEFAULT true,
@@ -50,7 +60,7 @@ CREATE TABLE workers (
     updated_at TIMESTAMP DEFAULT NOW()
 );
 
--- 4. PLANTILLAS DE TURNO
+-- 5. PLANTILLAS DE TURNO
 CREATE TABLE shift_templates (
     id SERIAL PRIMARY KEY,
     name VARCHAR(80) NOT NULL,
@@ -73,7 +83,7 @@ CREATE TABLE shift_templates (
     CONSTRAINT unique_code_per_branch UNIQUE (code, branch_id)
 );
 
--- 5. HORARIOS SEMANALES
+-- 6. HORARIOS SEMANALES
 CREATE TABLE schedules (
     id SERIAL PRIMARY KEY,
     worker_id INTEGER NOT NULL REFERENCES workers(id),
@@ -83,6 +93,7 @@ CREATE TABLE schedules (
     custom_end_time TIME,
     total_hours NUMERIC(4,2) NOT NULL,
     is_day_off BOOLEAN DEFAULT false,
+    is_locked BOOLEAN DEFAULT false,
     status VARCHAR(20) DEFAULT 'draft' CHECK (
         status IN ('draft', 'published', 'modified')
     ),
@@ -100,7 +111,7 @@ CREATE TABLE schedules (
     )
 );
 
--- 6. AUDIT LOG
+-- 7. AUDIT LOG
 CREATE TABLE audit_log (
     id BIGSERIAL PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id),
@@ -117,7 +128,7 @@ CREATE TABLE audit_log (
     created_at TIMESTAMP DEFAULT NOW()
 );
 
--- 7. REGLAS LABORALES
+-- 8. REGLAS LABORALES
 CREATE TABLE labor_rules (
     id SERIAL PRIMARY KEY,
     rule_code VARCHAR(30) NOT NULL,
@@ -128,7 +139,7 @@ CREATE TABLE labor_rules (
     created_at TIMESTAMP DEFAULT NOW()
 );
 
--- 8. ESTADO SEMANAL POR SUCURSAL
+-- 9. ESTADO SEMANAL POR SUCURSAL
 CREATE TABLE weekly_status (
     id SERIAL PRIMARY KEY,
     branch_id INTEGER NOT NULL REFERENCES branches(id),
@@ -151,6 +162,9 @@ CREATE INDEX idx_schedules_date ON schedules(date);
 CREATE INDEX idx_schedules_status ON schedules(status);
 CREATE INDEX idx_workers_branch ON workers(branch_id);
 CREATE INDEX idx_workers_rut ON workers(rut);
+CREATE INDEX idx_users_rut ON users(rut);
+CREATE INDEX idx_user_branches_user ON user_branches(user_id);
+CREATE INDEX idx_user_branches_branch ON user_branches(branch_id);
 CREATE INDEX idx_audit_log_entity ON audit_log(entity_type, entity_id);
 CREATE INDEX idx_audit_log_user ON audit_log(user_id);
 CREATE INDEX idx_audit_log_created ON audit_log(created_at);
@@ -161,15 +175,16 @@ CREATE INDEX idx_weekly_status_branch_week ON weekly_status(branch_id, week_star
 -- DATOS INICIALES
 -- ============================================================
 
--- Reglas laborales
+-- Reglas laborales (Chile - Ley 40 horas)
 INSERT INTO labor_rules (rule_code, rule_value, effective_from, effective_until, description) VALUES
-('MAX_WEEKLY_HOURS', 44, '2024-04-01', '2026-03-31', 'Jornada máxima 44 hrs semanales'),
 ('MAX_WEEKLY_HOURS', 42, '2026-04-01', '2028-03-31', 'Jornada máxima 42 hrs semanales'),
 ('MAX_WEEKLY_HOURS', 40, '2028-04-01', NULL, 'Jornada máxima 40 hrs semanales'),
-('MAX_DAILY_HOURS', 10, '2024-04-01', NULL, 'Máximo 10 hrs diarias ordinarias'),
-('MAX_CONSECUTIVE_DAYS', 6, '2024-04-01', NULL, 'Máximo 6 días consecutivos trabajados'),
-('MIN_FREE_SUNDAYS', 2, '2024-04-01', NULL, 'Mínimo 2 domingos libres por mes'),
-('MAX_OVERTIME_DAILY_HOURS', 2, '2024-04-01', NULL, 'Máximo 2 hrs extra por día');
+('MIN_WEEKLY_HOURS', 36, '2026-04-01', NULL, 'Mínimo sugerido 36 hrs semanales'),
+('MAX_DAILY_HOURS', 10, '2026-04-01', NULL, 'Máximo 10 hrs diarias ordinarias'),
+('MAX_CONSECUTIVE_DAYS', 6, '2026-04-01', NULL, 'Máximo 6 días consecutivos trabajados'),
+('MIN_FREE_SUNDAYS', 2, '2026-04-01', NULL, 'Mínimo 2 domingos libres por mes'),
+('MAX_OVERTIME_DAILY_HOURS', 2, '2026-04-01', NULL, 'Máximo 2 hrs extra por día'),
+('OVERTIME_THRESHOLD', 42, '2026-04-01', NULL, 'Horas semanales a partir de las cuales se consideran extras');
 
 -- Plantillas de turno globales
 INSERT INTO shift_templates (name, code, start_time, end_time, color, is_global) VALUES

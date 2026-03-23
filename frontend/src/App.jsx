@@ -1,8 +1,13 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { Routes, Route, Navigate } from 'react-router-dom'
 import { createPortal } from 'react-dom'
+import { useAuth } from './context/AuthContext'
+import LoginPage from './pages/LoginPage'
+import api from './api/client'
+import { parseRules, classifyWeeklyHours, isAutoLocked } from './utils/laborRules'
 import './index.css'
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// ─── Helpers ───────────────────────────────────────────────────
 const calcHours = (start, end) => {
   if (!start || !end) return 0;
   const [sh, sm] = start.split(':').map(Number);
@@ -12,135 +17,76 @@ const calcHours = (start, end) => {
   return Math.round(d * 10) / 10;
 };
 
-let nextTplId = 6;
-const freshId = () => ++nextTplId;
+const getMonday = (d) => {
+  const dt = new Date(d);
+  const day = dt.getDay();
+  const diff = dt.getDate() - day + (day === 0 ? -6 : 1);
+  dt.setDate(diff);
+  dt.setHours(0, 0, 0, 0);
+  return dt;
+};
 
-const TODAY = new Date('2026-03-19T00:00:00'); // fixed reference date
+const toDateStr = (d) => d.toISOString().split('T')[0];
 
-const genDays = (weeks = 16) => {
-  const out = [];
-  const ref = new Date('2026-03-19T12:00:00');
-  const dow = ref.getDay();
-  const base = new Date(ref);
-  // Start 4 weeks back (historical view)
-  base.setDate(ref.getDate() + (dow === 0 ? -6 : 1 - dow) - 28);
-  for (let i = 0; i < weeks * 7; i++) {
-    const d = new Date(base);
-    d.setDate(base.getDate() + i);
-    const sun = d.getDay() === 0;
-    const dayDate = new Date(d); dayDate.setHours(0,0,0,0);
-    const isPast = dayDate < TODAY;
-    out.push({
-      dateStr: d.toISOString().split('T')[0],
+const genWeekDays = (mondayDate) => {
+  const days = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(mondayDate);
+    d.setDate(mondayDate.getDate() + i);
+    days.push({
+      dateStr: toDateStr(d),
       day: d.getDate(),
-      dayName: ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'][d.getDay()],
+      dayName: ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'][d.getDay()],
       mon: d.toLocaleString('es-ES', { month: 'short' }),
-      sun,
-      isPast,
+      isSun: d.getDay() === 0,
     });
   }
-  return out;
+  return days;
 };
 
-const weekLabel = (sundayStr) => {
-  const s = new Date(sundayStr + 'T12:00:00');
-  const m = new Date(s); m.setDate(s.getDate() - 6);
-  const sm = m.toLocaleString('es-ES', { month: 'short' }).substring(0, 3);
-  const em = s.toLocaleString('es-ES', { month: 'short' }).substring(0, 3);
-  return sm === em
-    ? `${m.getDate()}-${s.getDate()} ${sm}`
-    : `${m.getDate()} ${sm} – ${s.getDate()} ${em}`;
-};
+// ─── Protected Route ────────────────────────────────────────────
+function ProtectedRoute({ children }) {
+  const { user, loading } = useAuth();
+  if (loading) return <div style={{ color: '#94A3B8', padding: '40px', textAlign: 'center' }}>Cargando...</div>;
+  return user ? children : <Navigate to="/login" replace />;
+}
 
-// ─── Initial Data ─────────────────────────────────────────────────────────────
-const INIT_TEMPLATES = [
-  { id: 1, code: 'TM', start: '08:00', end: '16:00', color: '#3B82F6' },
-  { id: 2, code: 'TT', start: '15:00', end: '23:00', color: '#8B5CF6' },
-  { id: 3, code: 'TC', start: '08:00', end: '18:00', color: '#10B981' },
-  { id: 4, code: 'MA', start: '08:00', end: '13:00', color: '#F59E0B' },
-  { id: 5, code: 'MP', start: '13:00', end: '18:00', color: '#EF4444' },
-];
-
-const INIT_WORKERS = [
-  { id: 1, name: 'Juan Pérez',   rut: '12.345.678-9' },
-  { id: 2, name: 'María Gómez',  rut: '13.456.789-0' },
-  { id: 3, name: 'Pedro Silva',  rut: '14.567.890-1' },
-  { id: 4, name: 'Ana Rojas',    rut: '15.678.901-2' },
-];
-
-// Pre-generate some historical data for past weeks
-const generateHistoricalData = (days) => {
-  const patterns = {
-    1: { codes: ['TM','TM','TM','TM','TM','L','L','TM','TM','TC','TM','TM','L','L','TM','TM','TM','TM','TC','L','L','TM','TT','TM','TM','TC','L','L'] },
-    2: { codes: ['TT','TT','TT','TT','L','TT','L','TT','TC','TT','TT','L','TT','L','TT','TT','TT','TT','L','TT','L','TC','TT','TT','TT','L','TT','L'] },
-    3: { codes: ['TC','TM','TC','TC','TC','L','L','TC','TC','TM','TC','TC','L','L','TC','TC','TC','TM','TC','L','L','TC','TC','TC','TC','TM','L','L'] },
-    4: { codes: ['MA','MA','MP','MA','MA','L','L','MA','MA','MA','MP','MA','L','L','MA','MP','MA','MA','MA','L','L','MA','MA','MP','MA','MA','L','L'] },
-  };
-  const result = {};
-  INIT_WORKERS.forEach(w => {
-    result[w.id] = {};
-    const pat = patterns[w.id]?.codes || [];
-    const pastDays = days.filter(d => d.isPast);
-    pastDays.forEach((d, i) => {
-      if (pat[i % pat.length]) {
-        result[w.id][d.dateStr] = pat[i % pat.length];
-      }
-    });
-  });
-  return result;
-};
-
-const DAYS = genDays();
-const HISTORICAL = generateHistoricalData(DAYS);
-
-// ─── Portal Dropdown ──────────────────────────────────────────────────────────
+// ─── Portal Dropdown ────────────────────────────────────────────
 const PortalDropdown = ({ open, rect, templates, code, onSelect, onClose }) => {
   if (!open || !rect) return null;
-
   const spaceBelow = window.innerHeight - rect.bottom;
   const flip = spaceBelow < 300 && rect.top > 300;
-
-  // FIX 6: If rect.left is too close to left edge (behind sticky name column), shift right
   const rawLeft = rect.left + rect.width / 2;
   const safeLeft = Math.max(rawLeft, 220);
-
   const style = {
-    position: 'fixed',
-    left: safeLeft,
+    position: 'fixed', left: safeLeft,
     transform: flip ? 'translate(-50%, -100%)' : 'translateX(-50%)',
     top: flip ? rect.top - 4 : rect.bottom + 4,
-    zIndex: 9999,
-    background: '#1E293B',
-    border: '1px solid #334155',
-    borderRadius: '8px',
-    padding: '6px',
-    boxShadow: '0 14px 28px rgba(0,0,0,.55)',
-    minWidth: '175px',
-    maxHeight: '280px',
-    overflowY: 'auto',
+    zIndex: 9999, background: '#1E293B', border: '1px solid #334155',
+    borderRadius: '8px', padding: '6px',
+    boxShadow: '0 14px 28px rgba(0,0,0,.55)', minWidth: '175px',
+    maxHeight: '280px', overflowY: 'auto',
   };
-
   return createPortal(
     <div data-portal-dropdown="true" onClick={e => e.stopPropagation()} style={style}>
       <div className="dropdown-item clear" onClick={() => { onSelect(null); onClose(); }}>
         <span>🗑️ Borrar turno</span>
       </div>
-      <div className="dropdown-item" style={{ color:'#94A3B8' }}
-        onClick={() => { onSelect('L'); onClose(); }}>
+      <div className="dropdown-item" style={{ color: '#94A3B8' }}
+        onClick={() => { onSelect('__OFF__'); onClose(); }}>
         <span>🛌 Día Libre</span>
       </div>
-      <div className="dropdown-divider"/>
+      <div className="dropdown-divider" />
       {templates.map(t => {
-        const h = calcHours(t.start, t.end);
-        const active = code === t.code;
+        const h = calcHours(t.start_time, t.end_time);
         return (
           <div key={t.id} className="dropdown-item"
-            onClick={() => { onSelect(t.code); onClose(); }}
-            style={{ background: active ? 'rgba(255,255,255,0.07)' : undefined, borderRadius:'6px' }}>
-            <div className="dropdown-color" style={{ background: t.color }}/>
-            <div style={{ flex:1 }}>
-              <span style={{ color: t.color, fontWeight:'bold', fontSize:'13px' }}>{t.code}</span>
-              <div style={{ fontSize:'10px', color:'#64748B' }}>{t.start}–{t.end}</div>
+            onClick={() => { onSelect(t); onClose(); }}
+            style={{ background: code === t.code ? 'rgba(255,255,255,0.07)' : undefined, borderRadius: '6px' }}>
+            <div className="dropdown-color" style={{ background: t.color }} />
+            <div style={{ flex: 1 }}>
+              <span style={{ color: t.color, fontWeight: 'bold', fontSize: '13px' }}>{t.code}</span>
+              <div style={{ fontSize: '10px', color: '#64748B' }}>{t.start_time}–{t.end_time}</div>
             </div>
             <span className="dropdown-item-hours">{h}h</span>
           </div>
@@ -151,402 +97,368 @@ const PortalDropdown = ({ open, rect, templates, code, onSelect, onClose }) => {
   );
 };
 
-// ─── Shift Cell ───────────────────────────────────────────────────────────────
-const ShiftCell = ({ code, date, workerId, templates, isPast, swapMode, swapSource, onSelect, onSwapClick, isOpen, onToggle }) => {
+// ─── Shift Cell ─────────────────────────────────────────────────
+const ShiftCell = ({ entry, dateStr, workerId, templates, rules, schedMap, swapMode, swapSource, onSelect, onSwapClick, isOpen, onToggle }) => {
   const [rect, setRect] = useState(null);
   const ref = useRef(null);
-
-  const isL = code === 'L';
-  const tpl = !isL ? templates.find(t => t.code === code) : null;
-  const h   = tpl ? calcHours(tpl.start, tpl.end) : 0;
-
-  const isSource = swapSource?.workerId === workerId && swapSource?.date === date;
+  const isLocked = entry?.is_locked || isAutoLocked(dateStr, schedMap, rules);
+  const isDayOff = entry?.is_day_off;
+  const template = entry?.shift_template ? templates.find(t => t.id === entry.shift_template.id) : null;
+  const h = template ? calcHours(template.start_time, template.end_time) : 0;
+  const isSource = swapSource?.workerId === workerId && swapSource?.date === dateStr;
   const isTarget = swapMode && swapSource && !isSource;
 
   useEffect(() => {
     if (!isOpen) return;
     const close = (e) => {
-      if (!e.target.closest('.shift-selector') && !e.target.closest('[data-portal-dropdown]')) {
-        onToggle(false);
-      }
+      if (!e.target.closest('.shift-selector') && !e.target.closest('[data-portal-dropdown]')) onToggle(false);
     };
-    // FIX 1: Only close on scroll if scroll did NOT originate inside the portal dropdown
-    const scroll = (e) => {
-      if (!e.target.closest('[data-portal-dropdown]')) {
-        onToggle(false);
-      }
-    };
+    const scroll = (e) => { if (!e.target.closest('[data-portal-dropdown]')) onToggle(false); };
     document.addEventListener('mousedown', close);
     window.addEventListener('scroll', scroll, true);
-    return () => {
-      document.removeEventListener('mousedown', close);
-      window.removeEventListener('scroll', scroll, true);
-    };
+    return () => { document.removeEventListener('mousedown', close); window.removeEventListener('scroll', scroll, true); };
   }, [isOpen, onToggle]);
 
   const handleClick = () => {
-    if (isPast) return; // FIX 2: Past days are read-only
-    if (swapMode) { onSwapClick(workerId, date, code); return; }
-    if (ref.current && !isOpen) {
-      setRect(ref.current.getBoundingClientRect());
-    }
+    if (isLocked) return;
+    if (swapMode) { onSwapClick(workerId, dateStr); return; }
+    if (ref.current && !isOpen) setRect(ref.current.getBoundingClientRect());
     onToggle(!isOpen);
   };
 
   let extraStyle = {};
-  if (isSource)  extraStyle = { boxShadow: '0 0 0 2px #F59E0B', borderColor: '#F59E0B', background: 'rgba(245,158,11,0.12)' };
-  if (isTarget)  extraStyle = { boxShadow: '0 0 0 2px #3B82F6', borderColor: '#3B82F6', background: 'rgba(59,130,246,0.10)', cursor: 'crosshair' };
-
-  // FIX 2: Style for past/historical cells
-  const pastStyle = isPast ? { opacity: 0.55, cursor: 'default', background: 'rgba(15,23,42,0.5)' } : {};
+  if (isSource) extraStyle = { boxShadow: '0 0 0 2px #F59E0B', borderColor: '#F59E0B', background: 'rgba(245,158,11,0.12)' };
+  if (isTarget) extraStyle = { boxShadow: '0 0 0 2px #3B82F6', borderColor: '#3B82F6', background: 'rgba(59,130,246,0.10)', cursor: 'crosshair' };
+  const lockedStyle = isLocked ? { opacity: 0.6, cursor: 'not-allowed', background: 'rgba(124,58,237,0.08)' } : {};
 
   return (
-    <div ref={ref} style={{ display:'block' }}>
+    <div ref={ref} style={{ display: 'block' }}>
       <button type="button" onClick={handleClick}
-        className={`shift-btn ${tpl ? 'has-shift' : isL ? 'day-off' : ''}`}
-        style={{ '--shift-color': tpl?.color, ...extraStyle, ...pastStyle, minHeight: '64px', width: '100%' }}>
-        {/* Past lock icon */}
-        {isPast && code && (
-          <span style={{ position:'absolute', top:'3px', right:'4px', fontSize:'9px', color:'#475569' }}>🔒</span>
-        )}
-        {tpl ? (
+        className={`shift-btn ${template ? 'has-shift' : isDayOff ? 'day-off' : ''}`}
+        style={{ '--shift-color': template?.color, ...extraStyle, ...lockedStyle, minHeight: '64px', width: '100%' }}>
+        {isLocked && <span style={{ position: 'absolute', top: '3px', right: '4px', fontSize: '10px', color: '#7C3AED' }}>🔒</span>}
+        {template ? (
           <>
-            <span className="shift-code">{tpl.code}</span>
-            <span style={{ fontSize:'10px', color: tpl.color, opacity: 0.85, marginTop:'2px' }}>{tpl.start}–{tpl.end}</span>
+            <span className="shift-code">{template.code}</span>
+            <span style={{ fontSize: '10px', color: template.color, opacity: 0.85, marginTop: '2px' }}>{template.start_time}–{template.end_time}</span>
             <span className="shift-hours-label">{h}h</span>
           </>
-        ) : isL ? (
+        ) : isDayOff || isLocked ? (
           <>
-            <span style={{ fontSize:'16px' }}>🛌</span>
-            <span className="shift-dayoff-label">Libre</span>
+            <span style={{ fontSize: '16px' }}>🛌</span>
+            <span className="shift-dayoff-label">{isLocked ? 'Libre 🔒' : 'Libre'}</span>
           </>
         ) : (
-          <span className="shift-empty" style={{ fontSize:'24px' }}>+</span>
+          <span className="shift-empty" style={{ fontSize: '24px' }}>+</span>
         )}
       </button>
-      {!isPast && (
-        <PortalDropdown open={isOpen} rect={rect} templates={templates} code={code}
+      {!isLocked && (
+        <PortalDropdown open={isOpen} rect={rect} templates={templates} code={template?.code}
           onSelect={onSelect} onClose={() => onToggle(false)} />
       )}
     </div>
   );
 };
 
-// ─── Template Editor Modal ─────────────────────────────────────────────────────
-const TplModal = ({ templates, setTemplates, onClose }) => {
-  const addRow = () => setTemplates(prev => [
-    ...prev, { id: freshId(), code: 'NUE', start: '08:00', end: '16:00', color: '#6366F1' }
-  ]);
-  const delRow = (id) => setTemplates(prev => prev.filter(t => t.id !== id));
-  const upd = (id, field, val) => setTemplates(prev =>
-    prev.map(t => t.id === id ? { ...t, [field]: val } : t)
-  );
+// ─── Main Schedule Dashboard ────────────────────────────────────
+function ScheduleDashboard() {
+  const { user, logout, currentBranch, currentBranchId, switchBranch } = useAuth();
+  const tableRef = useRef(null);
 
-  // FIX 4: 6-column grid: Código | Entrada | Salida | Dur | Color | ×
-  const GRID = '88px 120px 120px 52px 44px 38px';
-
-  return (
-    <div className="modal-overlay" style={{ zIndex:1000, display:'flex' }}>
-      <div className="modal" style={{ width:'560px', maxHeight:'90vh', display:'flex', flexDirection:'column' }}>
-        <div className="modal-header">
-          <h3>⚙️ Plantillas de Turno</h3>
-          <button className="modal-close" onClick={onClose}>&times;</button>
-        </div>
-        <div className="modal-body" style={{ overflowY: 'auto', maxHeight: '60vh', paddingBottom: '16px' }}>
-          {/* Header */}
-          <div style={{ display:'grid', gridTemplateColumns: GRID, gap:'8px',
-            color:'#64748B', fontSize:'11px', fontWeight:700, textTransform:'uppercase',
-            marginBottom:'8px', padding:'0 4px' }}>
-            <span>Código</span><span>Entrada</span><span>Salida</span>
-            <span>Dur.</span><span>Color</span><span></span>
-          </div>
-          {templates.map(t => {
-            const h = calcHours(t.start, t.end);
-            return (
-              <div key={t.id} style={{ display:'grid', gridTemplateColumns: GRID,
-                gap:'8px', alignItems:'center', marginBottom:'10px' }}>
-                {/* Código */}
-                <input type="text" value={t.code} maxLength={5}
-                  style={{ width:'100%', background:'#0F172A', border:`1px solid ${t.color}`,
-                    color: t.color, borderRadius:'6px', padding:'5px 6px', fontWeight:'bold',
-                    textAlign:'center', fontSize:'13px' }}
-                  onChange={e => upd(t.id,'code',e.target.value.toUpperCase())} />
-                {/* Entrada */}
-                <input type="time" value={t.start}
-                  style={{ background:'#0F172A', border:'1px solid #334155', color:'#F1F5F9',
-                    borderRadius:'6px', padding:'5px 6px', width:'100%' }}
-                  onChange={e => upd(t.id,'start',e.target.value)} />
-                {/* Salida */}
-                <input type="time" value={t.end}
-                  style={{ background:'#0F172A', border:'1px solid #334155', color:'#F1F5F9',
-                    borderRadius:'6px', padding:'5px 6px', width:'100%' }}
-                  onChange={e => upd(t.id,'end',e.target.value)} />
-                {/* Duración (FIX 4: own column) */}
-                <div style={{ textAlign:'center', fontSize:'12px', fontWeight:'bold', color:'#94A3B8' }}>
-                  {h}h
-                </div>
-                {/* Color */}
-                <input type="color" value={t.color}
-                  style={{ width:'40px', height:'34px', border:'none', background:'none',
-                    cursor:'pointer', borderRadius:'4px' }}
-                  onChange={e => upd(t.id,'color',e.target.value)} />
-                {/* Eliminar */}
-                <button onClick={() => delRow(t.id)} title="Eliminar"
-                  style={{ background:'rgba(239,68,68,0.1)', border:'1px solid rgba(239,68,68,0.3)',
-                    color:'#F87171', borderRadius:'6px', cursor:'pointer', fontSize:'16px',
-                    width:'36px', height:'34px', display:'flex', alignItems:'center', justifyContent:'center' }}>
-                  ×
-                </button>
-              </div>
-            );
-          })}
-
-          <button onClick={addRow} className="btn btn-secondary"
-            style={{ width:'100%', marginTop:'12px', borderStyle:'dashed' }}>
-            + Agregar plantilla
-          </button>
-
-          <div className="alert alert-warning" style={{ marginTop:'14px', fontSize:'12px' }}>
-            Las horas totales se calculan automáticamente. Los cambios se reflejan de inmediato en la grilla.
-          </div>
-        </div>
-        <div className="modal-footer">
-          <button className="btn btn-primary" onClick={onClose}>Guardar y Cerrar</button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-// ─── Main App ────────────────────────────────────────────────────────────────
-export default function App() {
-  const [templates, setTemplates] = useState(INIT_TEMPLATES);
-  const tableWrapperRef = useRef(null);
-  const [schedules, setSchedules] = useState(() => {
-    // Start with historical data pre-loaded
-    const init = {};
-    INIT_WORKERS.forEach(w => { init[w.id] = { ...HISTORICAL[w.id] }; });
-    return init;
-  });
-  const [showTplModal, setShowTplModal] = useState(false);
+  const [weekMonday, setWeekMonday] = useState(() => getMonday(new Date()));
+  const [templates, setTemplates] = useState([]);
+  const [workers, setWorkers] = useState([]);
+  const [scheduleData, setScheduleData] = useState({ workers: [] });
+  const [rules, setRules] = useState(parseRules([]));
+  const [weeklyStatus, setWeeklyStatus] = useState('pending');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [toast, setToast] = useState(null);
   const [openCellKey, setOpenCellKey] = useState(null);
-
-  // ── Swap state ──
-  const [swapMode,   setSwapMode]   = useState(false);
+  const [swapMode, setSwapMode] = useState(false);
   const [swapSource, setSwapSource] = useState(null);
+  // Local draft: { workerId: { dateStr: { template, is_day_off } } }
+  const [draft, setDraft] = useState({});
 
-  // ── Labor rule enforcement ──
-  const applyRules = (sched) => {
-    const s = { ...sched };
-    let cons = 0;
-    DAYS.forEach((d, i) => {
-      if (d.isPast) return; // Don't modify historical data
-      const c = s[d.dateStr];
-      if (c && c !== 'L') {
-        cons++;
-        if (cons >= 6 && i + 1 < DAYS.length) { s[DAYS[i+1].dateStr] = 'L'; cons = 0; }
-      } else { cons = 0; }
-    });
+  const days = genWeekDays(weekMonday);
+  const weekStartStr = toDateStr(weekMonday);
+  const weekEndStr = toDateStr(days[6].date || new Date(weekMonday.getTime() + 6 * 86400000));
 
-    const sunByMonth = {};
-    DAYS.filter(d => d.sun).forEach(d => {
-      if (!sunByMonth[d.mon]) sunByMonth[d.mon] = [];
-      sunByMonth[d.mon].push(d.dateStr);
-    });
-    Object.values(sunByMonth).forEach(suns => {
-      const futureSuns = suns.filter(x => !DAYS.find(d => d.dateStr === x)?.isPast);
-      const worked = futureSuns.filter(x => s[x] && s[x] !== 'L');
-      if (worked.length >= 2) futureSuns.forEach(x => { if (!s[x] || s[x] === 'L') s[x] = 'L'; });
-    });
-
-    return s;
+  const showToast = (msg, type = 'success') => {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 3500);
   };
 
-  const setShift = (workerId, dateStr, code) => {
-    setSchedules(prev => {
-      const next = { ...prev[workerId], [dateStr]: code };
-      return { ...prev, [workerId]: applyRules(next) };
-    });
-  };
-
-  // ── Copy previous 4 weeks ──
-  const handleCopyMonth = () => {
-    setSchedules(prev => {
-      const next = { ...prev };
-      INIT_WORKERS.forEach(w => {
-        const workerSched = { ...next[w.id] };
-        DAYS.filter(d => !d.isPast).forEach(d => {
-          const currentD = new Date(d.dateStr + 'T12:00:00');
-          const prevD = new Date(currentD);
-          prevD.setDate(currentD.getDate() - 28);
-          const prevDateStr = prevD.toISOString().split('T')[0];
-          if (workerSched[prevDateStr] !== undefined) {
-            workerSched[d.dateStr] = workerSched[prevDateStr];
-          }
+  // Load data on branch/week change
+  const loadData = useCallback(async () => {
+    if (!currentBranchId) return;
+    setLoading(true);
+    try {
+      const [tplRes, wRes, schRes, rulesRes] = await Promise.all([
+        api.templates.list({ branch_id: currentBranchId, is_active: true }),
+        api.workers.list({ branch_id: currentBranchId, is_active: true }),
+        api.schedules.get({ branch_id: currentBranchId, week_start: weekStartStr }),
+        api.schedules.laborRules(),
+      ]);
+      setTemplates(tplRes);
+      setWorkers(wRes);
+      setScheduleData(schRes.data || { workers: [] });
+      setRules(parseRules(rulesRes));
+      // Build draft from API data
+      const newDraft = {};
+      (schRes.data?.workers || []).forEach(w => {
+        newDraft[w.worker_id] = {};
+        Object.entries(w.days || {}).forEach(([date, day]) => {
+          newDraft[w.worker_id][date] = day;
         });
-        next[w.id] = applyRules(workerSched);
       });
-      return next;
+      setDraft(newDraft);
+      // Weekly status
+      const statusRes = await api.status.branch(currentBranchId, { week_start: weekStartStr });
+      setWeeklyStatus(statusRes.publish_status || 'pending');
+    } catch (err) {
+      showToast(`Error al cargar: ${err.message}`, 'error');
+    } finally {
+      setLoading(false);
+    }
+  }, [currentBranchId, weekStartStr]);
+
+  useEffect(() => { loadData(); }, [loadData]);
+
+  // Build a flat schedMap for a worker (for rule checks)
+  const getSchedMap = (workerId) => draft[workerId] || {};
+
+  const setShift = (workerId, dateStr, value) => {
+    setDraft(prev => {
+      const workerDraft = { ...(prev[workerId] || {}) };
+      if (value === null) {
+        delete workerDraft[dateStr];
+      } else if (value === '__OFF__') {
+        workerDraft[dateStr] = { is_day_off: true, shift_template: null, total_hours: 0 };
+      } else {
+        workerDraft[dateStr] = {
+          is_day_off: false,
+          is_locked: false,
+          shift_template: { id: value.id, code: value.code, name: value.name },
+          total_hours: calcHours(value.start_time, value.end_time),
+        };
+      }
+      return { ...prev, [workerId]: workerDraft };
     });
   };
 
-  // ── Swap logic ──
-  const handleSwapClick = (workerId, date) => {
-    if (!swapSource) {
-      setSwapSource({ workerId, date });
-    } else {
-      const { workerId: wA, date: dA } = swapSource;
-      const wB = workerId, dB = date;
-      setSchedules(prev => {
-        const cA = prev[wA]?.[dA] ?? null;
-        const cB = prev[wB]?.[dB] ?? null;
-        const newA = applyRules({ ...prev[wA], [dA]: cB });
-        const newB = applyRules({ ...prev[wB], [dB]: cA });
-        return { ...prev, [wA]: newA, [wB]: newB };
+  const handleSave = async () => {
+    if (!currentBranchId) return;
+    setSaving(true);
+    try {
+      const entries = [];
+      Object.entries(draft).forEach(([workerId, days]) => {
+        Object.entries(days).forEach(([dateStr, day]) => {
+          entries.push({
+            worker_id: parseInt(workerId),
+            date: dateStr,
+            shift_template_id: day.shift_template?.id || null,
+            is_day_off: day.is_day_off || false,
+            notes: day.notes || null,
+          });
+        });
       });
+      const res = await api.schedules.bulk({
+        branch_id: currentBranchId,
+        week_start: weekStartStr,
+        schedules: entries,
+      });
+      const warnings = res.warnings?.length ? `\n⚠️ ${res.warnings.join(', ')}` : '';
+      showToast(`${res.message}${warnings}`, res.warnings?.length ? 'warning' : 'success');
+      await loadData();
+    } catch (err) {
+      showToast(`Error al guardar: ${err.message}`, 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handlePublish = async () => {
+    if (!confirm('¿Publicar semana? Los jefes recibirán los horarios.')) return;
+    try {
+      const res = await api.schedules.publish({ branch_id: currentBranchId, week_start: weekStartStr });
+      showToast(res.message);
+      setWeeklyStatus('published');
+    } catch (err) {
+      showToast(`Error: ${err.message}`, 'error');
+    }
+  };
+
+  const handleCopyPrevWeek = async () => {
+    const prevMonday = new Date(weekMonday);
+    prevMonday.setDate(weekMonday.getDate() - 7);
+    if (!confirm(`¿Copiar semana ${toDateStr(prevMonday)} a esta semana?`)) return;
+    try {
+      const res = await api.schedules.copyWeek({
+        branch_id: currentBranchId,
+        source_week: toDateStr(prevMonday),
+        target_week: weekStartStr,
+      });
+      showToast(res.message);
+      await loadData();
+    } catch (err) {
+      showToast(`Error: ${err.message}`, 'error');
+    }
+  };
+
+  const handleSwapClick = (workerId, dateStr) => {
+    if (!swapSource) {
+      setSwapSource({ workerId, date: dateStr });
+    } else {
+      api.schedules.swap({
+        swap_a: { worker_id: swapSource.workerId, date: swapSource.date },
+        swap_b: { worker_id: workerId, date: dateStr },
+      }).then(res => {
+        showToast(res.message);
+        loadData();
+      }).catch(err => showToast(`Error: ${err.message}`, 'error'));
       setSwapSource(null);
       setSwapMode(false);
     }
   };
 
-  const cancelSwap = () => { setSwapMode(false); setSwapSource(null); };
-
-  // ── Scroll to Today ──
-  const scrollToToday = () => {
-    if (!tableWrapperRef.current) return;
-    const todayStr = TODAY.toISOString().split('T')[0];
-    const th = tableWrapperRef.current.querySelector(`th[data-date="${todayStr}"]`);
-    if (th) {
-      const wrapperRect = tableWrapperRef.current.getBoundingClientRect();
-      const thRect = th.getBoundingClientRect();
-      const offset = thRect.left - wrapperRect.left + tableWrapperRef.current.scrollLeft - 180; // 180 = sticky col width
-      tableWrapperRef.current.scrollTo({ left: offset, behavior: 'smooth' });
-    }
+  const handleExcelExport = () => {
+    api.export.excel({ branch_id: currentBranchId, week_start: weekStartStr })
+      .catch(err => showToast(`Error exportando: ${err.message}`, 'error'));
   };
 
-  // ── Header ──
-  const header = () => {
-    const cols = [
-      <th key="w" className="col-worker"
-        style={{ position:'sticky', left:0, zIndex:60, background:'#0F172A',
-          minWidth:'160px', borderRight:'1px solid var(--border-color)' }}>
-        Trabajador
+  const navigateWeek = (dir) => {
+    const next = new Date(weekMonday);
+    next.setDate(weekMonday.getDate() + dir * 7);
+    setWeekMonday(next);
+    setDraft({});
+  };
+
+  // Header columns
+  const headerCols = [
+    <th key="worker" className="col-worker"
+      style={{ position: 'sticky', left: 0, zIndex: 60, background: '#0F172A', minWidth: '160px', borderRight: '1px solid var(--border-color)' }}>
+      Trabajador
+    </th>,
+    ...days.map(d => (
+      <th key={d.dateStr} data-date={d.dateStr} className={`col-day ${d.isSun ? 'col-sunday' : ''}`}
+        style={{ minWidth: '100px' }}>
+        <span className="day-name">{d.dayName}</span>
+        <span className="day-date">{d.day} {d.mon}</span>
       </th>
-    ];
-    DAYS.forEach(d => {
-      const pastHeader = d.isPast ? { color:'#475569' } : {};
-      cols.push(
-        <th key={d.dateStr} data-date={d.dateStr} className={`col-day ${d.sun ? 'col-sunday' : ''}`}
-          style={{ minWidth:'100px', ...pastHeader, outline: !d.isPast && d.dateStr === TODAY.toISOString().split('T')[0] ? '2px solid #3B82F6' : undefined }}>
-          <span className="day-name">{d.dayName}</span>
-          <span className="day-date" style={d.isPast ? { color:'#475569' } : {}}>{d.day} {d.mon}</span>
-          {d.isPast && <span style={{ display:'block', fontSize:'9px', color:'#334155' }}>PASADO</span>}
-        </th>
-      );
-      if (d.sun) cols.push(
-        <th key={`cut-${d.dateStr}`} className="col-total"
-          style={{ background: d.isPast ? '#0d1a2b' : '#1E293B',
-            borderLeft:'1px solid var(--border-color)', minWidth:'110px',
-            fontSize:'11px', lineHeight:1.4, whiteSpace:'pre-line' }}>
-          <span style={{ color: d.isPast ? '#334155' : '#94A3B8', display:'block' }}>{weekLabel(d.dateStr)}</span>
-          <span style={{ color: d.isPast ? '#334155' : '#F1F5F9', fontSize:'10px' }}>TOTAL</span>
-        </th>
-      );
-    });
-    return cols;
-  };
+    )),
+    <th key="total" className="col-total"
+      style={{ background: '#1E293B', borderLeft: '1px solid var(--border-color)', minWidth: '90px', fontSize: '11px' }}>
+      TOTAL
+    </th>,
+  ];
 
-  // ── Worker row ──
-  const workerRow = (worker) => {
-    const sched = schedules[worker.id] || {};
+  // Worker row
+  const renderWorkerRow = (worker) => {
+    const workerDraft = draft[worker.worker_id] || {};
+    const schedMap = workerDraft;
+    let totalHours = 0;
+
     const cells = [
-      <td key={`n-${worker.id}`} className="worker-cell"
-        style={{ position:'sticky', left:0, zIndex:40, background:'#0F172A',
-          borderRight:'1px solid var(--border-color)' }}>
-        <div className="worker-name" style={{ color:'#F1F5F9' }}>{worker.name}</div>
+      <td key="name" className="worker-cell"
+        style={{ position: 'sticky', left: 0, zIndex: 40, background: '#0F172A', borderRight: '1px solid var(--border-color)' }}>
+        <div className="worker-name">{worker.name}</div>
         <div className="worker-rut">{worker.rut}</div>
-      </td>
+      </td>,
     ];
 
-    let weekH = 0;
-    DAYS.forEach(d => {
-      const code = sched[d.dateStr];
-      const tpl  = templates.find(t => t.code === code);
-      weekH += tpl ? calcHours(tpl.start, tpl.end) : 0;
-      const cellKey = `${worker.id}-${d.dateStr}`;
-
+    days.forEach(d => {
+      const entry = workerDraft[d.dateStr];
+      const h = entry?.total_hours || 0;
+      if (!entry?.is_day_off) totalHours += h;
+      const cellKey = `${worker.worker_id}-${d.dateStr}`;
       cells.push(
-        <td key={cellKey}
-          className={`shift-cell ${d.sun ? 'sunday-col' : ''}`}
-          style={{ padding:'6px', background: d.isPast ? 'rgba(10,16,27,0.3)' : undefined }}>
+        <td key={d.dateStr} className={`shift-cell ${d.isSun ? 'sunday-col' : ''}`} style={{ padding: '6px' }}>
           <ShiftCell
-            code={code} date={d.dateStr} workerId={worker.id}
-            templates={templates}
-            isPast={d.isPast}
+            entry={entry} dateStr={d.dateStr} workerId={worker.worker_id}
+            templates={templates} rules={rules} schedMap={schedMap}
             swapMode={swapMode} swapSource={swapSource}
-            onSelect={c => setShift(worker.id, d.dateStr, c)}
+            onSelect={val => setShift(worker.worker_id, d.dateStr, val)}
             onSwapClick={handleSwapClick}
             isOpen={openCellKey === cellKey}
-            onToggle={(open) => setOpenCellKey(open ? cellKey : null)}
+            onToggle={open => setOpenCellKey(open ? cellKey : null)}
           />
         </td>
       );
-
-      if (d.sun) {
-        const ideal = weekH >= 36 && weekH <= 42;
-        const over  = weekH > 42;
-        const cls   = weekH === 0 ? 'empty' : ideal ? 'ok' : over ? 'danger' : 'warning';
-        const pastTotStyle = d.isPast ? { opacity: 0.4 } : {};
-        cells.push(
-          <td key={`tot-${worker.id}-${d.dateStr}`}
-            style={{ background: d.isPast ? 'rgba(10,16,27,0.3)' : 'rgba(30,41,59,0.35)',
-              borderLeft:'1px solid var(--border-color)',
-              textAlign:'center', verticalAlign:'middle', padding:'10px 14px', ...pastTotStyle }}>
-            <span className={`total-hours ${cls}`}>{weekH}h</span>
-            <div style={{ fontSize:'18px', marginTop:'4px' }}>
-              {weekH > 0 ? (ideal ? '✅' : over ? '❌' : '⚠️') : '–'}
-            </div>
-            {weekH > 0 && (
-              <div className="total-bar" style={{ marginTop:'6px' }}>
-                <div className={`total-bar-fill ${cls}`}
-                  style={{ width:`${Math.min(100, weekH/44*100)}%` }}/>
-              </div>
-            )}
-          </td>
-        );
-        weekH = 0;
-      }
     });
+
+    const status = classifyWeeklyHours(totalHours, rules);
+    const colorMap = { ok: '#10B981', danger: '#EF4444', overtime: '#F59E0B', empty: '#475569', warning: '#F59E0B' };
+    cells.push(
+      <td key="total"
+        style={{ background: 'rgba(30,41,59,0.35)', borderLeft: '1px solid var(--border-color)', textAlign: 'center', verticalAlign: 'middle', padding: '10px 14px' }}>
+        <span className={`total-hours ${status.cls}`}>{status.label}</span>
+        <div style={{ fontSize: '16px', marginTop: '4px' }}>{status.emoji}</div>
+        {totalHours > 0 && (
+          <div className="total-bar" style={{ marginTop: '6px' }}>
+            <div className={`total-bar-fill ${status.cls}`}
+              style={{ width: `${Math.min(100, totalHours / rules.MAX_WEEKLY * 100)}%`, background: colorMap[status.cls] }} />
+          </div>
+        )}
+      </td>
+    );
+
     return cells;
   };
 
+  const statusColors = { pending: '#94A3B8', draft: '#F59E0B', published: '#10B981' };
+  const statusLabels = { pending: 'Sin turnos', draft: 'Borrador', published: 'Publicado' };
+
   return (
     <>
+      {/* Toast */}
+      {toast && (
+        <div style={{
+          position: 'fixed', top: '20px', right: '20px', zIndex: 99999,
+          background: toast.type === 'error' ? '#EF4444' : toast.type === 'warning' ? '#F59E0B' : '#10B981',
+          color: '#fff', padding: '12px 20px', borderRadius: '10px',
+          boxShadow: '0 8px 24px rgba(0,0,0,0.4)', fontSize: '13px', fontWeight: 600,
+          maxWidth: '360px', animation: 'fadeIn 0.2s ease',
+        }}>
+          {toast.msg}
+        </div>
+      )}
+
       <header className="header">
         <div className="header-left">
           <div className="logo">
             <span className="logo-icon">📅</span>
             <span className="logo-text">TurnosRRHH</span>
           </div>
-          <span className="header-divider"/>
-          <span className="branch-name">Planificación Anual Continua</span>
+          <span className="header-divider" />
+          {/* Branch selector */}
+          {user?.branches?.length > 1 ? (
+            <select
+              value={currentBranchId || ''}
+              onChange={e => switchBranch(parseInt(e.target.value))}
+              style={{ background: '#1E293B', border: '1px solid #334155', color: '#F1F5F9', borderRadius: '8px', padding: '6px 10px', fontSize: '13px', cursor: 'pointer' }}>
+              {user.branches.map(b => (
+                <option key={b.id} value={b.id}>{b.name}</option>
+              ))}
+            </select>
+          ) : (
+            <span className="branch-name">{currentBranch?.name || '—'}</span>
+          )}
         </div>
         <div className="header-right">
-          <button
-            className={`btn ${swapMode ? 'btn-primary' : 'btn-outline'}`}
-            onClick={() => swapMode ? cancelSwap() : setSwapMode(true)}
-            style={{ marginRight:'10px' }}
-          >
+          <button className={`btn ${swapMode ? 'btn-primary' : 'btn-outline'}`}
+            onClick={() => { swapMode ? (setSwapMode(false), setSwapSource(null)) : setSwapMode(true); }}
+            style={{ marginRight: '10px' }}>
             {swapMode ? '✖ Cancelar intercambio' : '🔄 Intercambiar turnos'}
           </button>
-          <button className="btn btn-outline" onClick={() => setShowTplModal(true)} style={{ marginRight:'15px' }}>
-            ⚙️ Plantillas
+          <button className="btn btn-outline" onClick={handleExcelExport} style={{ marginRight: '10px' }}>
+            📥 Exportar Excel
           </button>
-          <div className="user-info">
-            <div className="user-avatar">CM</div>
+          <div className="user-info" style={{ cursor: 'pointer' }} onClick={logout}>
+            <div className="user-avatar">{user?.first_name?.[0]}{user?.last_name?.[0]}</div>
             <div className="user-details">
-              <span className="user-name">Carlos Muñoz</span>
-              <span className="user-role">RRHH Admin</span>
+              <span className="user-name">{user?.first_name} {user?.last_name}</span>
+              <span className="user-role">{user?.role === 'admin' ? 'Admin RRHH' : 'Jefe Sucursal'}</span>
             </div>
           </div>
         </div>
@@ -558,74 +470,102 @@ export default function App() {
             background: swapSource ? 'rgba(59,130,246,0.12)' : 'rgba(245,158,11,0.12)',
             border: `1px solid ${swapSource ? '#3B82F6' : '#F59E0B'}`,
             color: swapSource ? '#93C5FD' : '#FCD34D',
-            marginBottom:'12px', borderRadius:'8px', padding:'10px 16px', fontSize:'13px' }}>
+            marginBottom: '12px', borderRadius: '8px', padding: '10px 16px', fontSize: '13px',
+          }}>
             {swapSource
-              ? `🎯 Seleccionaste a ${INIT_WORKERS.find(w=>w.id===swapSource.workerId)?.name} en ${swapSource.date}. Ahora haz clic en el turno destino.`
-              : '🔄 Modo intercambio activo — haz clic en el primer turno a intercambiar.'}
+              ? `🎯 Seleccionaste ${swapSource.date}. Haz clic en el turno destino.`
+              : '🔄 Modo intercambio — haz clic en el primer turno a intercambiar.'}
           </div>
         )}
 
+        {/* Week navigation + status bar */}
         <div className="top-bar">
           <div className="top-bar-actions">
-            <div className="status-badge published"><span className="status-dot"/>Planificación</div>
-            <div style={{ display:'flex', gap:'16px', alignItems:'center', fontSize:'12px', color:'#94A3B8' }}>
-              <span>Días semanales: <strong style={{color:'#F1F5F9'}}>6 máx</strong></span>
-              <span style={{ color:'#334155' }}>|</span>
-              <span>Mínimo hrs semanales: <strong style={{color:'#10B981'}}>36 hrs ✅</strong></span>
-              <span style={{ color:'#334155' }}>|</span>
-              <span>Máximo hrs semanales: <strong style={{color:'#EF4444'}}>42 hrs ❌</strong></span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <button className="btn btn-outline" onClick={() => navigateWeek(-1)}>‹ Anterior</button>
+              <span style={{ color: '#F1F5F9', fontWeight: 600, fontSize: '14px' }}>
+                {days[0]?.day} {days[0]?.mon} – {days[6]?.day} {days[6]?.mon}
+              </span>
+              <button className="btn btn-outline" onClick={() => navigateWeek(1)}>Siguiente ›</button>
+              <button className="btn btn-outline"
+                onClick={() => { setWeekMonday(getMonday(new Date())); setDraft({}); }}
+                style={{ background: 'rgba(59,130,246,0.1)', borderColor: '#3B82F6', color: '#93C5FD' }}>
+                📍 Hoy
+              </button>
+            </div>
+            <div style={{ display: 'flex', gap: '16px', alignItems: 'center', fontSize: '12px', color: '#94A3B8' }}>
+              <span>Estado: <strong style={{ color: statusColors[weeklyStatus] }}>{statusLabels[weeklyStatus]}</strong></span>
+              <span style={{ color: '#334155' }}>|</span>
+              <span>Rango OK: <strong style={{ color: '#10B981' }}>{rules.MIN_WEEKLY}-{rules.MAX_WEEKLY}h ✅</strong></span>
+              <span style={{ color: '#334155' }}>|</span>
+              <span>Extra hasta: <strong style={{ color: '#F59E0B' }}>{rules.MAX_WEEKLY + rules.MAX_OVERTIME_DAILY}h</strong></span>
             </div>
           </div>
         </div>
 
+        {/* Action bar */}
         <div className="action-bar">
           <div className="action-bar-left">
-            <button className="btn btn-secondary" onClick={scrollToToday} style={{ background:'rgba(59,130,246,0.1)', borderColor:'#3B82F6', color:'#93C5FD' }}>📍 Ir a Hoy</button>
-            <button className="btn btn-secondary" onClick={handleCopyMonth}>📋 Copiar 4 Sem. Anteriores</button>
-            <button className="btn btn-secondary" onClick={() => {
-              if (confirm('¿Limpiar todos los turnos futuros asignados?')) {
-                setSchedules(prev => {
-                  const next = {};
-                  INIT_WORKERS.forEach(w => {
-                    next[w.id] = {};
-                    DAYS.filter(d => d.isPast).forEach(d => { next[w.id][d.dateStr] = prev[w.id]?.[d.dateStr]; });
-                  });
-                  return next;
-                });
-              }
-            }}>🗑️ Limpiar futuro</button>
+            <button className="btn btn-secondary" onClick={handleCopyPrevWeek}>📋 Copiar semana anterior</button>
+            <button className="btn btn-secondary" onClick={() => { if (confirm('¿Limpiar todos los turnos del borrador?')) setDraft({}); }}>
+              🗑️ Limpiar borrador
+            </button>
           </div>
-          {/* FIX 3: Removed useless assignments counter — action-bar-right intentionally empty */}
         </div>
 
-        <div ref={tableWrapperRef} className="table-wrapper"
-          style={{ overflowX:'auto', maxWidth:'100%', height:'auto',
-            maxHeight:'calc(100vh - 220px)', background:'#0F172A', position:'relative', zIndex:1 }}>
-          <table className="schedule-table"
-            style={{ borderCollapse:'separate', borderSpacing:0, width:'max-content' }}>
-            <thead><tr>{header()}</tr></thead>
-            <tbody>
-              {INIT_WORKERS.map(w => <tr key={w.id}>{workerRow(w)}</tr>)}
-            </tbody>
-          </table>
-        </div>
+        {/* Schedule grid */}
+        {loading ? (
+          <div style={{ color: '#94A3B8', textAlign: 'center', padding: '60px', fontSize: '15px' }}>
+            ⏳ Cargando horarios...
+          </div>
+        ) : (
+          <div ref={tableRef} className="table-wrapper"
+            style={{ overflowX: 'auto', maxWidth: '100%', maxHeight: 'calc(100vh - 240px)', background: '#0F172A', position: 'relative', zIndex: 1 }}>
+            <table className="schedule-table" style={{ borderCollapse: 'separate', borderSpacing: 0, width: 'max-content' }}>
+              <thead><tr>{headerCols}</tr></thead>
+              <tbody>
+                {workers.length === 0 ? (
+                  <tr><td colSpan={days.length + 2} style={{ textAlign: 'center', color: '#475569', padding: '40px' }}>
+                    No hay trabajadores en esta sucursal. Agrega trabajadores primero.
+                  </td></tr>
+                ) : workers.map(w => (
+                  <tr key={w.id}>
+                    {renderWorkerRow({ worker_id: w.id, name: `${w.first_name} ${w.last_name}`, rut: w.rut })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
 
-        <div className="bottom-actions" style={{ marginTop:'16px' }}>
+        {/* Bottom actions */}
+        <div className="bottom-actions" style={{ marginTop: '16px' }}>
           <div className="bottom-buttons">
-            <button className="btn btn-outline">Guardar borrador</button>
-            {/* FIX 5: Renamed button */}
-            <button className="btn btn-primary">💾 Guardar Turnos</button>
+            <button className="btn btn-outline" onClick={handleSave} disabled={saving}>
+              {saving ? '⏳ Guardando...' : '💾 Guardar Borrador'}
+            </button>
+            <button className="btn btn-primary" onClick={handlePublish}
+              disabled={weeklyStatus === 'published' || saving}>
+              {weeklyStatus === 'published' ? '✅ Publicado' : '🚀 Publicar Semana'}
+            </button>
           </div>
         </div>
       </main>
-
-      {showTplModal && (
-        <TplModal
-          templates={templates}
-          setTemplates={setTemplates}
-          onClose={() => setShowTplModal(false)}
-        />
-      )}
     </>
+  );
+}
+
+// ─── Root App ───────────────────────────────────────────────────
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/login" element={<LoginPage />} />
+      <Route path="/" element={
+        <ProtectedRoute>
+          <ScheduleDashboard />
+        </ProtectedRoute>
+      } />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   );
 }
