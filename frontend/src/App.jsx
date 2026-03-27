@@ -274,8 +274,30 @@ function ScheduleDashboard() {
     });
   };
 
+  const hasInvalidWeeklyHours = () => {
+    for (const worker of workers) {
+      const workerDraft = draft[worker.id] || {};
+      let weeklyHours = 0;
+      for (let i = 0; i < days.length; i++) {
+        const d = days[i];
+        const entry = workerDraft[d.dateStr];
+        if (entry && !entry.is_day_off) weeklyHours += (entry.total_hours || 0);
+        if (d.isSun || i === days.length - 1) {
+          const status = classifyWeeklyHours(weeklyHours, rules);
+          if (status.cls === 'danger') return true;
+          weeklyHours = 0;
+        }
+      }
+    }
+    return false;
+  };
+
   const handleSave = async () => {
     if (!currentBranchId) return;
+    if (hasInvalidWeeklyHours()) {
+      showToast('Hay semanas en rojo. Corrige horas semanales antes de guardar.', 'error');
+      return;
+    }
     setSaving(true);
     try {
       const entriesByWeek = {};
@@ -366,30 +388,37 @@ function ScheduleDashboard() {
       .catch(err => showToast(`Error exportando: ${err.message}`, 'error'));
   };
 
-  // Header columns
+  // Header columns (cada domingo agrega una columna de total semanal)
   const headerCols = [
     <th key="worker" className="col-worker"
       style={{ position: 'sticky', left: 0, zIndex: 60, background: '#0F172A', minWidth: '160px', borderRight: '1px solid var(--border-color)' }}>
       Trabajador
     </th>,
-    ...days.map(d => (
+  ];
+  let weekCounter = 1;
+  days.forEach((d, idx) => {
+    headerCols.push(
       <th key={d.dateStr} data-date={d.dateStr} className={`col-day ${d.isSun ? 'col-sunday' : ''}`}
         style={{ minWidth: '78px' }}>
         <span className="day-name">{d.dayName}</span>
         <span className="day-date">{d.day} {d.mon}</span>
       </th>
-    )),
-    <th key="total" className="col-total"
-      style={{ background: '#1E293B', borderLeft: '1px solid var(--border-color)', minWidth: '90px', fontSize: '11px' }}>
-      SEM ACTUAL
-    </th>,
-  ];
+    );
+    if (d.isSun || idx === days.length - 1) {
+      headerCols.push(
+        <th key={`w-total-${idx}`} className="col-total"
+          style={{ background: '#1E293B', borderLeft: '1px solid var(--border-color)', minWidth: '92px', fontSize: '11px' }}>
+          SEM {weekCounter++}
+        </th>
+      );
+    }
+  });
 
   // Worker row
   const renderWorkerRow = (worker) => {
     const workerDraft = draft[worker.worker_id] || {};
     const schedMap = workerDraft;
-    let totalHours = 0;
+    let weeklyHours = 0;
 
     const cells = [
       <td key="name" className="worker-cell"
@@ -399,10 +428,10 @@ function ScheduleDashboard() {
       </td>,
     ];
 
-    days.forEach(d => {
+    days.forEach((d, idx) => {
       const entry = workerDraft[d.dateStr];
       const h = entry?.total_hours || 0;
-      if (!entry?.is_day_off && isDateInWeek(d.dateStr, currentWeekStartStr)) totalHours += h;
+      if (!entry?.is_day_off) weeklyHours += h;
       const cellKey = `${worker.worker_id}-${d.dateStr}`;
       cells.push(
         <td key={d.dateStr} className={`shift-cell ${d.isSun ? 'sunday-col' : ''}`} style={{ padding: '6px' }}>
@@ -417,23 +446,25 @@ function ScheduleDashboard() {
           />
         </td>
       );
+      if (d.isSun || idx === days.length - 1) {
+        const status = classifyWeeklyHours(weeklyHours, rules);
+        const colorMap = { ok: '#10B981', danger: '#EF4444', overtime: '#F59E0B', empty: '#475569', warning: '#F59E0B' };
+        cells.push(
+          <td key={`w-total-${worker.worker_id}-${idx}`}
+            style={{ background: 'rgba(30,41,59,0.35)', borderLeft: '1px solid var(--border-color)', textAlign: 'center', verticalAlign: 'middle', padding: '10px 8px' }}>
+            <span className={`total-hours ${status.cls}`}>{status.label}</span>
+            <div style={{ fontSize: '14px', marginTop: '2px' }}>{status.emoji}</div>
+            {weeklyHours > 0 && (
+              <div className="total-bar" style={{ marginTop: '4px', width: '54px' }}>
+                <div className={`total-bar-fill ${status.cls}`}
+                  style={{ width: `${Math.min(100, weeklyHours / rules.MAX_WEEKLY * 100)}%`, background: colorMap[status.cls] }} />
+              </div>
+            )}
+          </td>
+        );
+        weeklyHours = 0;
+      }
     });
-
-    const status = classifyWeeklyHours(totalHours, rules);
-    const colorMap = { ok: '#10B981', danger: '#EF4444', overtime: '#F59E0B', empty: '#475569', warning: '#F59E0B' };
-    cells.push(
-      <td key="total"
-        style={{ background: 'rgba(30,41,59,0.35)', borderLeft: '1px solid var(--border-color)', textAlign: 'center', verticalAlign: 'middle', padding: '10px 14px' }}>
-        <span className={`total-hours ${status.cls}`}>{status.label}</span>
-        <div style={{ fontSize: '16px', marginTop: '4px' }}>{status.emoji}</div>
-        {totalHours > 0 && (
-          <div className="total-bar" style={{ marginTop: '6px' }}>
-            <div className={`total-bar-fill ${status.cls}`}
-              style={{ width: `${Math.min(100, totalHours / rules.MAX_WEEKLY * 100)}%`, background: colorMap[status.cls] }} />
-          </div>
-        )}
-      </td>
-    );
 
     return cells;
   };
@@ -557,7 +588,7 @@ function ScheduleDashboard() {
               <thead><tr>{headerCols}</tr></thead>
               <tbody>
                 {workers.length === 0 ? (
-                  <tr><td colSpan={days.length + 2} style={{ textAlign: 'center', color: '#475569', padding: '40px' }}>
+                  <tr><td colSpan={headerCols.length} style={{ textAlign: 'center', color: '#475569', padding: '40px' }}>
                     No hay trabajadores en esta sucursal. Agrega trabajadores primero.
                   </td></tr>
                 ) : workers.map(w => (
