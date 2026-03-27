@@ -44,7 +44,7 @@ services:
     ports:
       - "3010:3000"
     environment:
-      - VITE_API_URL=http://localhost:8010
+      - VITE_API_URL=${VITE_API_URL:-https://turnos.dpmake.cl}
     volumes:
       - ./frontend/src:/app/src
     restart: unless-stopped

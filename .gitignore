@@ -36,9 +36,14 @@ yarn-error.log*
 package-lock.json
 yarn.lock
 
-# Docker
+# Docker/runtime data
 postgres_data/
+postgres-data/
+appsmith-data/
 *.log
+
+# Local import/seed data
+backend/datos_para_db.json
 
 # IDE
 .idea/

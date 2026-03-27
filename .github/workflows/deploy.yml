@@ -9,44 +9,33 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Deploy files via SCP
-      uses: appleboy/scp-action@master
-      with:
-        host: ${{ secrets.VPS_HOST }}
-        username: ${{ secrets.VPS_USER }}
-        key: ${{ secrets.VPS_SSH_KEY }}
-        source: ".,!/.git,!/.github,!/.env*,!/postgres_data,!/node_modules,!/__pycache__,!/*.pyc"
-        target: "/opt/turnos-rrhh/"
-        rm: true
-
-    - name: Rebuild containers on VPS
+    - name: Deploy using SSH
       uses: appleboy/ssh-action@master
       with:
         host: ${{ secrets.VPS_HOST }}
         username: ${{ secrets.VPS_USER }}
         key: ${{ secrets.VPS_SSH_KEY }}
         script: |
+          set -e
           cd /opt/turnos-rrhh
-          echo "=== Iniciando deploy ==="
-          ls -la
 
-          # Verificar que .env existe (si no, el deploy fallará)
+          echo "=== Iniciando deploy ==="
           if [ ! -f ".env" ]; then
             echo "ERROR: .env no encontrado en /opt/turnos-rrhh"
-            echo "El archivo .env debe existir en el VPS (no se sube a GitHub)"
             exit 1
           fi
 
-          # Reconstruir contenedores
-          echo "Reconstruyendo contenedores..."
-          docker-compose down
-          docker-compose up -d --build
+          git fetch origin main
+          git reset --hard origin/main
 
-          # Verificar estado
+          echo "Reconstruyendo contenedores..."
+          docker compose up -d --build --remove-orphans
+
           echo "=== Estado de contenedores ==="
-          docker-compose ps
+          docker compose ps
+
+          echo "=== Healthcheck backend ==="
+          curl -fsS http://127.0.0.1:8010/health >/dev/null
+          echo "OK"
 
           echo "=== Deploy completado ==="
