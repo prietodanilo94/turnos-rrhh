@@ -28,20 +28,35 @@ const getMonday = (d) => {
 
 const toDateStr = (d) => d.toISOString().split('T')[0];
 
-const genWeekDays = (mondayDate) => {
+const genYearDays = (year) => {
   const days = [];
-  for (let i = 0; i < 7; i++) {
-    const d = new Date(mondayDate);
-    d.setDate(mondayDate.getDate() + i);
+  const start = new Date(year, 0, 1);
+  const end = new Date(year, 11, 31);
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    const cur = new Date(d);
     days.push({
-      dateStr: toDateStr(d),
-      day: d.getDate(),
-      dayName: ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'][d.getDay()],
-      mon: d.toLocaleString('es-ES', { month: 'short' }),
-      isSun: d.getDay() === 0,
+      dateStr: toDateStr(cur),
+      day: cur.getDate(),
+      dayName: ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'][cur.getDay()],
+      mon: cur.toLocaleString('es-ES', { month: 'short' }),
+      monthNum: cur.getMonth() + 1,
+      isSun: cur.getDay() === 0,
     });
   }
   return days;
+};
+
+const getMondayFromDateStr = (dateStr) => {
+  const d = new Date(`${dateStr}T00:00:00`);
+  return toDateStr(getMonday(d));
+};
+
+const isDateInWeek = (dateStr, weekStartStr) => {
+  const d = new Date(`${dateStr}T00:00:00`);
+  const w = new Date(`${weekStartStr}T00:00:00`);
+  const end = new Date(w);
+  end.setDate(w.getDate() + 6);
+  return d >= w && d <= end;
 };
 
 // ─── Protected Route ────────────────────────────────────────────
@@ -101,7 +116,9 @@ const PortalDropdown = ({ open, rect, templates, code, onSelect, onClose }) => {
 const ShiftCell = ({ entry, dateStr, workerId, templates, rules, schedMap, swapMode, swapSource, onSelect, onSwapClick, isOpen, onToggle }) => {
   const [rect, setRect] = useState(null);
   const ref = useRef(null);
-  const isLocked = entry?.is_locked || isAutoLocked(dateStr, schedMap, rules);
+  const todayStr = toDateStr(new Date());
+  const isPastDate = dateStr < todayStr;
+  const isLocked = isPastDate || entry?.is_locked || isAutoLocked(dateStr, schedMap, rules);
   const isDayOff = entry?.is_day_off;
   const template = entry?.shift_template ? templates.find(t => t.id === entry.shift_template.id) : null;
   const h = template ? calcHours(template.start_time, template.end_time) : 0;
@@ -165,7 +182,7 @@ function ScheduleDashboard() {
   const { user, logout, currentBranch, currentBranchId, switchBranch } = useAuth();
   const tableRef = useRef(null);
 
-  const [weekMonday, setWeekMonday] = useState(() => getMonday(new Date()));
+  const [viewYear, setViewYear] = useState(() => new Date().getFullYear());
   const [templates, setTemplates] = useState([]);
   const [workers, setWorkers] = useState([]);
   const [scheduleData, setScheduleData] = useState({ workers: [] });
@@ -180,9 +197,10 @@ function ScheduleDashboard() {
   // Local draft: { workerId: { dateStr: { template, is_day_off } } }
   const [draft, setDraft] = useState({});
 
-  const days = genWeekDays(weekMonday);
-  const weekStartStr = toDateStr(weekMonday);
-  const weekEndStr = toDateStr(days[6].date || new Date(weekMonday.getTime() + 6 * 86400000));
+  const days = genYearDays(viewYear);
+  const yearStartStr = `${viewYear}-01-01`;
+  const yearEndStr = `${viewYear}-12-31`;
+  const currentWeekStartStr = toDateStr(getMonday(new Date()));
 
   const showToast = (msg, type = 'success') => {
     setToast({ msg, type });
@@ -197,7 +215,7 @@ function ScheduleDashboard() {
       const [tplRes, wRes, schRes, rulesRes] = await Promise.all([
         api.templates.list({ branch_id: currentBranchId, is_active: true }),
         api.workers.list({ branch_id: currentBranchId, is_active: true }),
-        api.schedules.get({ branch_id: currentBranchId, week_start: weekStartStr }),
+        api.schedules.get({ branch_id: currentBranchId, date_from: yearStartStr, date_to: yearEndStr }),
         api.schedules.laborRules(),
       ]);
       setTemplates(tplRes);
@@ -214,16 +232,25 @@ function ScheduleDashboard() {
       });
       setDraft(newDraft);
       // Weekly status
-      const statusRes = await api.status.branch(currentBranchId, { week_start: weekStartStr });
+      const statusRes = await api.status.branch(currentBranchId, { week_start: currentWeekStartStr });
       setWeeklyStatus(statusRes.publish_status || 'pending');
     } catch (err) {
       showToast(`Error al cargar: ${err.message}`, 'error');
     } finally {
       setLoading(false);
     }
-  }, [currentBranchId, weekStartStr]);
+  }, [currentBranchId, yearStartStr, yearEndStr, currentWeekStartStr]);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  useEffect(() => {
+    if (loading || !tableRef.current) return;
+    const todayStr = toDateStr(new Date());
+    const todayHeader = tableRef.current.querySelector(`th[data-date="${todayStr}"]`);
+    if (todayHeader) {
+      todayHeader.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+    }
+  }, [loading, viewYear, workers.length]);
 
   // Build a flat schedMap for a worker (for rule checks)
   const getSchedMap = (workerId) => draft[workerId] || {};
@@ -251,10 +278,12 @@ function ScheduleDashboard() {
     if (!currentBranchId) return;
     setSaving(true);
     try {
-      const entries = [];
+      const entriesByWeek = {};
       Object.entries(draft).forEach(([workerId, days]) => {
         Object.entries(days).forEach(([dateStr, day]) => {
-          entries.push({
+          const monday = getMondayFromDateStr(dateStr);
+          entriesByWeek[monday] ||= [];
+          entriesByWeek[monday].push({
             worker_id: parseInt(workerId),
             date: dateStr,
             shift_template_id: day.shift_template?.id || null,
@@ -263,13 +292,22 @@ function ScheduleDashboard() {
           });
         });
       });
-      const res = await api.schedules.bulk({
-        branch_id: currentBranchId,
-        week_start: weekStartStr,
-        schedules: entries,
-      });
-      const warnings = res.warnings?.length ? `\n⚠️ ${res.warnings.join(', ')}` : '';
-      showToast(`${res.message}${warnings}`, res.warnings?.length ? 'warning' : 'success');
+
+      let created = 0;
+      let updated = 0;
+      const allWarnings = [];
+      for (const [weekStart, schedules] of Object.entries(entriesByWeek)) {
+        const res = await api.schedules.bulk({
+          branch_id: currentBranchId,
+          week_start: weekStart,
+          schedules,
+        });
+        created += (res.created || 0);
+        updated += (res.updated || 0);
+        if (res.warnings?.length) allWarnings.push(...res.warnings);
+      }
+      const warnMsg = allWarnings.length ? `\n⚠️ ${allWarnings.join(', ')}` : '';
+      showToast(`Guardado anual: ${created} creados, ${updated} actualizados${warnMsg}`, allWarnings.length ? 'warning' : 'success');
       await loadData();
     } catch (err) {
       showToast(`Error al guardar: ${err.message}`, 'error');
@@ -281,7 +319,7 @@ function ScheduleDashboard() {
   const handlePublish = async () => {
     if (!confirm('¿Publicar semana? Los jefes recibirán los horarios.')) return;
     try {
-      const res = await api.schedules.publish({ branch_id: currentBranchId, week_start: weekStartStr });
+      const res = await api.schedules.publish({ branch_id: currentBranchId, week_start: currentWeekStartStr });
       showToast(res.message);
       setWeeklyStatus('published');
     } catch (err) {
@@ -290,14 +328,15 @@ function ScheduleDashboard() {
   };
 
   const handleCopyPrevWeek = async () => {
-    const prevMonday = new Date(weekMonday);
-    prevMonday.setDate(weekMonday.getDate() - 7);
+    const thisMonday = getMonday(new Date());
+    const prevMonday = new Date(thisMonday);
+    prevMonday.setDate(thisMonday.getDate() - 7);
     if (!confirm(`¿Copiar semana ${toDateStr(prevMonday)} a esta semana?`)) return;
     try {
       const res = await api.schedules.copyWeek({
         branch_id: currentBranchId,
         source_week: toDateStr(prevMonday),
-        target_week: weekStartStr,
+        target_week: toDateStr(thisMonday),
       });
       showToast(res.message);
       await loadData();
@@ -323,15 +362,8 @@ function ScheduleDashboard() {
   };
 
   const handleExcelExport = () => {
-    api.export.excel({ branch_id: currentBranchId, week_start: weekStartStr })
+    api.export.excel({ branch_id: currentBranchId, week_start: currentWeekStartStr })
       .catch(err => showToast(`Error exportando: ${err.message}`, 'error'));
-  };
-
-  const navigateWeek = (dir) => {
-    const next = new Date(weekMonday);
-    next.setDate(weekMonday.getDate() + dir * 7);
-    setWeekMonday(next);
-    setDraft({});
   };
 
   // Header columns
@@ -342,14 +374,14 @@ function ScheduleDashboard() {
     </th>,
     ...days.map(d => (
       <th key={d.dateStr} data-date={d.dateStr} className={`col-day ${d.isSun ? 'col-sunday' : ''}`}
-        style={{ minWidth: '100px' }}>
+        style={{ minWidth: '78px' }}>
         <span className="day-name">{d.dayName}</span>
         <span className="day-date">{d.day} {d.mon}</span>
       </th>
     )),
     <th key="total" className="col-total"
       style={{ background: '#1E293B', borderLeft: '1px solid var(--border-color)', minWidth: '90px', fontSize: '11px' }}>
-      TOTAL
+      SEM ACTUAL
     </th>,
   ];
 
@@ -370,7 +402,7 @@ function ScheduleDashboard() {
     days.forEach(d => {
       const entry = workerDraft[d.dateStr];
       const h = entry?.total_hours || 0;
-      if (!entry?.is_day_off) totalHours += h;
+      if (!entry?.is_day_off && isDateInWeek(d.dateStr, currentWeekStartStr)) totalHours += h;
       const cellKey = `${worker.worker_id}-${d.dateStr}`;
       cells.push(
         <td key={d.dateStr} className={`shift-cell ${d.isSun ? 'sunday-col' : ''}`} style={{ padding: '6px' }}>
@@ -482,13 +514,13 @@ function ScheduleDashboard() {
         <div className="top-bar">
           <div className="top-bar-actions">
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-              <button className="btn btn-outline" onClick={() => navigateWeek(-1)}>‹ Anterior</button>
-              <span style={{ color: '#F1F5F9', fontWeight: 600, fontSize: '14px' }}>
-                {days[0]?.day} {days[0]?.mon} – {days[6]?.day} {days[6]?.mon}
+              <button className="btn btn-outline" onClick={() => setViewYear(y => y - 1)}>‹ Año Anterior</button>
+              <span style={{ color: '#F1F5F9', fontWeight: 700, fontSize: '14px' }}>
+                Calendario Anual {viewYear}
               </span>
-              <button className="btn btn-outline" onClick={() => navigateWeek(1)}>Siguiente ›</button>
+              <button className="btn btn-outline" onClick={() => setViewYear(y => y + 1)}>Año Siguiente ›</button>
               <button className="btn btn-outline"
-                onClick={() => { setWeekMonday(getMonday(new Date())); setDraft({}); }}
+                onClick={() => { setViewYear(new Date().getFullYear()); }}
                 style={{ background: 'rgba(59,130,246,0.1)', borderColor: '#3B82F6', color: '#93C5FD' }}>
                 📍 Hoy
               </button>
