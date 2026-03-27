@@ -511,7 +511,7 @@ body {
 
 .day-date {
     display: block;
-    font-size: 18px;
+    font-size: 13px;
     font-weight: 300;
     color: var(--text-muted);
     margin-top: 2px;
@@ -564,8 +564,8 @@ body {
 
 .shift-btn {
     width: 100%;
-    min-width: 105px;
-    padding: 10px 8px;
+    min-width: 72px;
+    padding: 8px 4px;
     border: 1px solid var(--border-color);
     background: var(--bg-primary);
     border-radius: var(--radius-sm);
@@ -576,7 +576,7 @@ body {
     gap: 3px;
     transition: all var(--transition-fast);
     position: relative;
-    min-height: 58px;
+    min-height: 56px;
     justify-content: center;
 }
 
@@ -630,13 +630,13 @@ body {
 }
 
 .shift-code {
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 700;
     color: var(--shift-color, var(--text-primary));
 }
 
 .shift-hours-label {
-    font-size: 10px;
+    font-size: 9px;
     color: var(--text-muted);
 }
 
@@ -1343,4 +1343,3 @@ body {
 .dropdown-item.clear {
     color: var(--accent-red);
 }
-

@@ -29,9 +29,9 @@ def get_rule(db: Session, code: str, ref_date: date) -> float:
         .first()
     )
     defaults = {
-        "MAX_WEEKLY_HOURS": 42.0, "MIN_WEEKLY_HOURS": 36.0,
+        "MAX_WEEKLY_HOURS": 44.0, "MIN_WEEKLY_HOURS": 36.0,
         "MAX_CONSECUTIVE_DAYS": 6.0, "MIN_FREE_SUNDAYS": 2.0,
-        "MAX_OVERTIME_DAILY_HOURS": 2.0, "OVERTIME_THRESHOLD": 42.0,
+        "MAX_OVERTIME_DAILY_HOURS": 2.0, "OVERTIME_THRESHOLD": 44.0,
     }
     return float(rule.rule_value) if rule else defaults.get(code, 0.0)
 
@@ -145,6 +145,8 @@ def compute_locked_days(db: Session, worker_id: int, week_start: date, week_end:
 def get_schedules(
     branch_id: Optional[int] = None,
     week_start: Optional[date] = None,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
     worker_id: Optional[int] = None,
     db: Session = Depends(get_db),
     user: User = Depends(require_role("admin", "manager")),
@@ -163,6 +165,12 @@ def get_schedules(
     if week_start:
         week_end = week_start + timedelta(days=6)
         query = query.filter(Schedule.date >= week_start, Schedule.date <= week_end)
+    elif date_from and date_to:
+        query = query.filter(Schedule.date >= date_from, Schedule.date <= date_to)
+    elif date_from:
+        query = query.filter(Schedule.date >= date_from)
+    elif date_to:
+        query = query.filter(Schedule.date <= date_to)
 
     if worker_id:
         query = query.filter(Schedule.worker_id == worker_id)
