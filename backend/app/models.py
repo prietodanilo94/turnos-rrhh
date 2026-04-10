@@ -215,3 +215,88 @@ class WeeklyStatus(Base):
         UniqueConstraint("branch_id", "week_start", name="unique_branch_week"),
         CheckConstraint("status IN ('pending', 'draft', 'published')", name="valid_weekly_status"),
     )
+
+
+# ──────────────────────────────────────────────────────────
+# MONTHLY PLANNER MODELS
+# ──────────────────────────────────────────────────────────
+
+class MonthlyPlan(Base):
+    """Header of a monthly planning session (one per branch/month, but multiples allowed per configuration)."""
+    __tablename__ = "monthly_plans"
+
+    id          = Column(Integer, primary_key=True, index=True)
+    branch_id   = Column(Integer, ForeignKey("branches.id"), nullable=False)
+    year        = Column(Integer, nullable=False)
+    month       = Column(Integer, nullable=False)          # 1-12
+    mode        = Column(String(20), nullable=False, default="planning")
+    status      = Column(String(20), default="draft")      # draft | generated | validated | exported
+    dotation    = Column(Integer, nullable=False)           # cupos de cobertura definidos para el mes
+    shift_count = Column(Integer, nullable=False, default=4)  # cuántos shift_templates usar en rotación
+    name        = Column(String(120), nullable=True)       # etiqueta libre (opcional)
+    created_by  = Column(Integer, ForeignKey("users.id"), nullable=False)
+    updated_by  = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at  = Column(DateTime, server_default=func.now())
+    updated_at  = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    branch      = relationship("Branch")
+    creator     = relationship("User", foreign_keys=[created_by])
+    exceptions  = relationship("MonthlyPlanException", back_populates="plan", cascade="all, delete-orphan")
+    assignments = relationship("MonthlyPlanAssignment", back_populates="plan", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        # Sin UniqueConstraint: se permiten múltiples planes por sucursal/mes
+        CheckConstraint("mode IN ('simulation', 'planning')", name="valid_monthly_mode"),
+        CheckConstraint("status IN ('draft', 'generated', 'validated', 'exported')", name="valid_monthly_status"),
+        CheckConstraint("month >= 1 AND month <= 12", name="valid_month_range"),
+        CheckConstraint("year >= 2020 AND year <= 2100", name="valid_monthly_year"),
+    )
+
+
+class MonthlyPlanException(Base):
+    """Monthly exceptions per worker: vacaciones, licencia, permiso, traslado, bloqueo."""
+    __tablename__ = "monthly_plan_exceptions"
+
+    id          = Column(Integer, primary_key=True, index=True)
+    plan_id     = Column(Integer, ForeignKey("monthly_plans.id", ondelete="CASCADE"), nullable=False)
+    worker_id   = Column(Integer, ForeignKey("workers.id"), nullable=False)
+    type        = Column(String(30), nullable=False)
+    date_from   = Column(Date, nullable=False)
+    date_to     = Column(Date, nullable=False)
+    note        = Column(Text, nullable=True)
+    created_at  = Column(DateTime, server_default=func.now())
+
+    plan        = relationship("MonthlyPlan", back_populates="exceptions")
+    worker      = relationship("Worker")
+
+    __table_args__ = (
+        CheckConstraint(
+            "type IN ('vacaciones','licencia','permiso','traslado','bloqueo')",
+            name="valid_monthly_exception_type"
+        ),
+        CheckConstraint("date_to >= date_from", name="valid_exception_daterange"),
+    )
+
+
+class MonthlyPlanAssignment(Base):
+    """Day-level assignments for a monthly plan. One row per worker per day."""
+    __tablename__ = "monthly_plan_assignments"
+
+    id              = Column(Integer, primary_key=True, index=True)
+    plan_id         = Column(Integer, ForeignKey("monthly_plans.id", ondelete="CASCADE"), nullable=False)
+    worker_id       = Column(Integer, ForeignKey("workers.id"), nullable=True)  # null = placeholder cupo sin RUT
+    day             = Column(Integer, nullable=False)   # 1-31
+    shift_code      = Column(String(10), nullable=True)  # null = día libre
+    time_text       = Column(String(30), nullable=True)  # "09:00 a 18:00" — texto literal para el export
+    is_day_off      = Column(Boolean, default=False)
+    is_placeholder  = Column(Boolean, default=False)     # True si worker_id es null (cupo sin asignar)
+    created_at      = Column(DateTime, server_default=func.now())
+    updated_at      = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    plan    = relationship("MonthlyPlan", back_populates="assignments")
+    worker  = relationship("Worker")
+
+    __table_args__ = (
+        UniqueConstraint("plan_id", "worker_id", "day", name="unique_monthly_plan_worker_day"),
+        CheckConstraint("day >= 1 AND day <= 31", name="valid_assignment_day"),
+    )

@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from app.config import settings
-from app.routes import auth, branches, workers, templates, schedules, users, status, export
+from app.routes import auth, branches, workers, templates, schedules, users, status, export, monthly_plans
 
 
 @asynccontextmanager
@@ -80,6 +80,7 @@ app.include_router(templates.router)
 app.include_router(schedules.router)
 app.include_router(status.router)
 app.include_router(export.router)
+app.include_router(monthly_plans.router)
 
 
 @app.get("/")

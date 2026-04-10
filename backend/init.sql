@@ -193,3 +193,66 @@ INSERT INTO shift_templates (name, code, start_time, end_time, color, is_global)
 ('Turno Completo',  'TC', '09:00', '18:30', '#10B981', true),
 ('Media Jornada AM','MA', '08:00', '13:00', '#F59E0B', true),
 ('Media Jornada PM','MP', '14:00', '19:00', '#EF4444', true);
+
+-- ============================================================
+-- PLANIFICADOR MENSUAL (módulo nuevo — no afecta módulo semanal)
+-- ============================================================
+
+-- 10. PLANES MENSUALES (cabecera)
+CREATE TABLE monthly_plans (
+    id          SERIAL PRIMARY KEY,
+    branch_id   INTEGER NOT NULL REFERENCES branches(id),
+    year        INTEGER NOT NULL CHECK (year >= 2020 AND year <= 2100),
+    month       INTEGER NOT NULL CHECK (month >= 1 AND month <= 12),
+    mode        VARCHAR(20) NOT NULL DEFAULT 'planning'
+                    CHECK (mode IN ('simulation', 'planning')),
+    status      VARCHAR(20) NOT NULL DEFAULT 'draft'
+                    CHECK (status IN ('draft', 'generated', 'validated', 'exported')),
+    dotation    INTEGER NOT NULL,
+    shift_count INTEGER NOT NULL DEFAULT 4,
+    name        VARCHAR(120),           -- etiqueta libre opcional
+    created_by  INTEGER NOT NULL REFERENCES users(id),
+    updated_by  INTEGER REFERENCES users(id),
+    created_at  TIMESTAMP DEFAULT NOW(),
+    updated_at  TIMESTAMP DEFAULT NOW()
+    -- Sin UNIQUE constraint: se permiten múltiples planes por sucursal/mes
+);
+
+-- 11. EXCEPCIONES MENSUALES (vacaciones, licencias, etc.)
+CREATE TABLE monthly_plan_exceptions (
+    id          SERIAL PRIMARY KEY,
+    plan_id     INTEGER NOT NULL REFERENCES monthly_plans(id) ON DELETE CASCADE,
+    worker_id   INTEGER NOT NULL REFERENCES workers(id),
+    type        VARCHAR(30) NOT NULL
+                    CHECK (type IN ('vacaciones','licencia','permiso','traslado','bloqueo')),
+    date_from   DATE NOT NULL,
+    date_to     DATE NOT NULL,
+    note        TEXT,
+    created_at  TIMESTAMP DEFAULT NOW(),
+    CONSTRAINT valid_exception_daterange CHECK (date_to >= date_from)
+);
+
+-- 12. ASIGNACIONES DIARIAS DEL PLAN MENSUAL
+CREATE TABLE monthly_plan_assignments (
+    id              SERIAL PRIMARY KEY,
+    plan_id         INTEGER NOT NULL REFERENCES monthly_plans(id) ON DELETE CASCADE,
+    worker_id       INTEGER REFERENCES workers(id),  -- NULL = cupo placeholder sin RUT
+    day             INTEGER NOT NULL CHECK (day >= 1 AND day <= 31),
+    shift_code      VARCHAR(10),        -- NULL = día libre
+    time_text       VARCHAR(30),        -- "09:00 a 18:00" — texto para el export de carga
+    is_day_off      BOOLEAN DEFAULT false,
+    is_placeholder  BOOLEAN DEFAULT false,
+    created_at      TIMESTAMP DEFAULT NOW(),
+    updated_at      TIMESTAMP DEFAULT NOW(),
+    CONSTRAINT unique_monthly_plan_worker_day UNIQUE (plan_id, worker_id, day)
+);
+
+-- ============================================================
+-- ÍNDICES — Módulo mensual
+-- ============================================================
+CREATE INDEX idx_monthly_plans_branch ON monthly_plans(branch_id);
+CREATE INDEX idx_monthly_plans_year_month ON monthly_plans(year, month);
+CREATE INDEX idx_monthly_exceptions_plan ON monthly_plan_exceptions(plan_id);
+CREATE INDEX idx_monthly_exceptions_worker ON monthly_plan_exceptions(worker_id);
+CREATE INDEX idx_monthly_assignments_plan ON monthly_plan_assignments(plan_id);
+CREATE INDEX idx_monthly_assignments_worker ON monthly_plan_assignments(worker_id);

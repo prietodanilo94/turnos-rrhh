@@ -364,3 +364,172 @@ class AuditLogResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# ── Monthly Planner ────────────────────────────────────────
+
+VALID_EXCEPTION_TYPES = ["vacaciones", "licencia", "permiso", "traslado", "bloqueo"]
+VALID_MONTHLY_MODES   = ["simulation", "planning"]
+VALID_MONTHLY_STATUSES = ["draft", "generated", "validated", "exported"]
+
+
+class MonthlyPlanCreate(BaseModel):
+    branch_id:   int
+    year:        int
+    month:       int
+    mode:        str = "planning"
+    dotation:    int
+    shift_count: int = 4
+    name:        Optional[str] = None
+
+    @field_validator("month")
+    @classmethod
+    def validate_month(cls, v):
+        if not 1 <= v <= 12:
+            raise ValueError("El mes debe estar entre 1 y 12")
+        return v
+
+    @field_validator("year")
+    @classmethod
+    def validate_year(cls, v):
+        if not 2020 <= v <= 2100:
+            raise ValueError("Año fuera de rango válido")
+        return v
+
+    @field_validator("mode")
+    @classmethod
+    def validate_mode(cls, v):
+        if v not in VALID_MONTHLY_MODES:
+            raise ValueError(f"Modo debe ser uno de: {VALID_MONTHLY_MODES}")
+        return v
+
+    @field_validator("dotation")
+    @classmethod
+    def validate_dotation(cls, v):
+        if v < 1:
+            raise ValueError("La dotación debe ser al menos 1")
+        return v
+
+    @field_validator("shift_count")
+    @classmethod
+    def validate_shift_count(cls, v):
+        if not 1 <= v <= 10:
+            raise ValueError("El número de turnos debe estar entre 1 y 10")
+        return v
+
+
+class MonthlyPlanUpdate(BaseModel):
+    mode:        Optional[str] = None
+    status:      Optional[str] = None
+    dotation:    Optional[int] = None
+    shift_count: Optional[int] = None
+    name:        Optional[str] = None
+
+
+class MonthlyPlanResponse(BaseModel):
+    id:          int
+    branch_id:   int
+    year:        int
+    month:       int
+    mode:        str
+    status:      str
+    dotation:    int
+    shift_count: int
+    name:        Optional[str]
+    created_by:  int
+    created_at:  datetime
+    updated_at:  datetime
+
+    class Config:
+        from_attributes = True
+
+
+class MonthlyExceptionCreate(BaseModel):
+    worker_id: int
+    type:      str
+    date_from: date
+    date_to:   date
+    note:      Optional[str] = None
+
+    @field_validator("type")
+    @classmethod
+    def validate_type(cls, v):
+        if v not in VALID_EXCEPTION_TYPES:
+            raise ValueError(f"Tipo debe ser uno de: {VALID_EXCEPTION_TYPES}")
+        return v
+
+    @field_validator("date_to")
+    @classmethod
+    def validate_dates(cls, v, info):
+        if "date_from" in info.data and v < info.data["date_from"]:
+            raise ValueError("date_to debe ser igual o posterior a date_from")
+        return v
+
+
+class MonthlyExceptionResponse(BaseModel):
+    id:        int
+    plan_id:   int
+    worker_id: int
+    type:      str
+    date_from: date
+    date_to:   date
+    note:      Optional[str]
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class MonthlyAssignmentEntry(BaseModel):
+    worker_id:      Optional[int] = None   # null = placeholder
+    day:            int
+    shift_code:     Optional[str] = None   # null = día libre
+    time_text:      Optional[str] = None   # "09:00 a 18:00"
+    is_day_off:     bool = False
+    is_placeholder: bool = False
+
+    @field_validator("day")
+    @classmethod
+    def validate_day(cls, v):
+        if not 1 <= v <= 31:
+            raise ValueError("El día debe estar entre 1 y 31")
+        return v
+
+
+class MonthlyAssignmentBulk(BaseModel):
+    assignments: list[MonthlyAssignmentEntry]
+
+
+class MonthlyAssignmentResponse(BaseModel):
+    id:             int
+    plan_id:        int
+    worker_id:      Optional[int]
+    day:            int
+    shift_code:     Optional[str]
+    time_text:      Optional[str]
+    is_day_off:     bool
+    is_placeholder: bool
+
+    class Config:
+        from_attributes = True
+
+
+class MonthlyPlanFull(BaseModel):
+    """Full plan with exceptions and assignments (used in GET /{id})."""
+    id:          int
+    branch_id:   int
+    year:        int
+    month:       int
+    mode:        str
+    status:      str
+    dotation:    int
+    shift_count: int
+    name:        Optional[str]
+    created_by:  int
+    created_at:  datetime
+    updated_at:  datetime
+    exceptions:  list[MonthlyExceptionResponse] = []
+    assignments: list[MonthlyAssignmentResponse] = []
+
+    class Config:
+        from_attributes = True

@@ -136,6 +136,59 @@ export const api = {
       URL.revokeObjectURL(url);
     },
   },
+
+  // ── Monthly Planner ─────────────────────────────────────────
+  monthlyPlans: {
+    /** Crear un nuevo plan mensual */
+    create: (data) =>
+      fetchWithAuth('/api/monthly-plans', { method: 'POST', body: JSON.stringify(data) }),
+
+    /** Listar planes — filtros opcionales: branch_id, year, month */
+    list: (params = {}) =>
+      fetchWithAuth('/api/monthly-plans?' + new URLSearchParams(params)),
+
+    /** Obtener plan completo con excepciones + asignaciones */
+    get: (id) =>
+      fetchWithAuth(`/api/monthly-plans/${id}`),
+
+    /** Actualizar cabecera del plan */
+    update: (id, data) =>
+      fetchWithAuth(`/api/monthly-plans/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+
+    /** Eliminar plan */
+    delete: (id) =>
+      fetchWithAuth(`/api/monthly-plans/${id}`, { method: 'DELETE' }),
+
+    /** Agregar excepción mensual (vacaciones, licencia, etc.) */
+    addException: (id, data) =>
+      fetchWithAuth(`/api/monthly-plans/${id}/exceptions`, { method: 'POST', body: JSON.stringify(data) }),
+
+    /** Eliminar excepción */
+    deleteException: (id, excId) =>
+      fetchWithAuth(`/api/monthly-plans/${id}/exceptions/${excId}`, { method: 'DELETE' }),
+
+    /** Guardar asignaciones en bulk (upsert) */
+    saveAssignments: (id, assignments) =>
+      fetchWithAuth(`/api/monthly-plans/${id}/assignments`, {
+        method: 'PUT',
+        body: JSON.stringify({ assignments }),
+      }),
+
+    /** Generar propuesta automática con shift_templates reales */
+    generate: (id) =>
+      fetchWithAuth(`/api/monthly-plans/${id}/generate`, { method: 'POST' }),
+
+    /** Descargar Excel formato carga (RUT + DIA1..DIA31) */
+    exportExcel: async (id, filename) => {
+      const blob = await fetchWithAuth(`/api/monthly-plans/${id}/export/excel`);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename || `plan_mensual_${id}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    },
+  },
 };
 
 export default api;
