@@ -43,8 +43,6 @@ services:
     build: ./frontend
     ports:
       - "3010:3000"
-    environment:
-      - VITE_API_URL=http://localhost:8010
     volumes:
       - ./frontend/src:/app/src
     restart: unless-stopped
