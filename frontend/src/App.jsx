@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route, Navigate, Link } from 'react-router-dom'
 import { createPortal } from 'react-dom'
 import { useAuth } from './context/AuthContext'
 import LoginPage from './pages/LoginPage'
+import MonthlyPlannerPage from './pages/MonthlyPlannerPage'
 import api from './api/client'
 import { parseRules, classifyWeeklyHours, isAutoLocked } from './utils/laborRules'
 import './index.css'
@@ -446,6 +447,9 @@ function ScheduleDashboard() {
           )}
         </div>
         <div className="header-right">
+          <Link className="btn btn-outline" to="/monthly-planner" style={{ marginRight: '10px' }}>
+            Planificacion mensual beta
+          </Link>
           <button className={`btn ${swapMode ? 'btn-primary' : 'btn-outline'}`}
             onClick={() => { swapMode ? (setSwapMode(false), setSwapSource(null)) : setSwapMode(true); }}
             style={{ marginRight: '10px' }}>
@@ -563,6 +567,16 @@ export default function App() {
       <Route path="/" element={
         <ProtectedRoute>
           <ScheduleDashboard />
+        </ProtectedRoute>
+      } />
+      <Route path="/weekly" element={
+        <ProtectedRoute>
+          <ScheduleDashboard />
+        </ProtectedRoute>
+      } />
+      <Route path="/monthly-planner" element={
+        <ProtectedRoute>
+          <MonthlyPlannerPage />
         </ProtectedRoute>
       } />
       <Route path="*" element={<Navigate to="/" replace />} />
