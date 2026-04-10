@@ -3,7 +3,10 @@
  * Centralized HTTP client with JWT auto-refresh and error handling.
  */
 
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8010';
+// In production (served via nginx), use same-origin so /api/* goes through the proxy.
+// In local dev, fall back to http://localhost:8010.
+const BASE_URL = import.meta.env.VITE_API_URL
+  || (window.location.hostname === 'localhost' ? 'http://localhost:8010' : '');
 
 // ── Token storage ──────────────────────────────────────────────
 export const storage = {
